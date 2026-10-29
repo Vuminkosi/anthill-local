@@ -786,9 +786,18 @@ def render(scenes: list[dict], images: list[Path], voices: list[Path], work_dir:
         else:
             overlay = work_dir / f"caption_overlay_{index}.png"
             _caption_overlay(scene["caption"], overlay)
+            # Restart the slow camera arc for each scene. Keep the overlay out
+            # of zoompan so captions remain crisp, stationary and readable.
+            phase = f"2*PI*on/{max(frame_count - 1, 1)}"
+            zoom = f"1+0.055*(0.5-0.5*cos({phase}))"
+            pan_x = f"(iw-iw/zoom)*(0.5+0.35*sin({phase}))"
+            pan_y = f"(ih-ih/zoom)*(0.5+0.35*cos({phase}))"
+            camera = (
+                f"zoompan=z='{zoom}':x='{pan_x}':y='{pan_y}':d=1:s=1080x1920:fps={fps}"
+            )
             command(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-stream_loop", "-1", "-i",
                      str(motion_clips[index]), "-loop", "1", "-i", str(overlay), "-filter_complex",
-                     "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[base];"
+                     f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps={fps},setsar=1,{camera}[base];"
                      "[1:v]format=rgba[caption];[base][caption]overlay=0:0:shortest=1,format=yuv420p[out]",
                      "-map", "[out]", "-frames:v", str(frame_count), "-an", "-c:v", "libx264",
                      "-preset", "veryfast", "-crf", "22", str(clip)], timeout=300, cancelled=cancelled)

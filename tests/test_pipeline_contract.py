@@ -170,6 +170,53 @@ class LocalInferenceContractTests(unittest.TestCase):
         render.assert_not_called()
         self.assertGreaterEqual(len(cancellation_checks), 5)
 
+    def test_motion_render_zooms_each_scene_before_caption_and_uses_its_frame_count(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="anthill-motion-render-zoom-") as temporary:
+            root = Path(temporary)
+            work_dir = root / "work"
+            work_dir.mkdir()
+            scenes = [
+                {"caption": f"Beat {index}", "narration": f"Narration for beat {index}."}
+                for index in range(4)
+            ]
+            images = [root / f"still_{index}.png" for index in range(4)]
+            voices = [root / f"voice_{index}.wav" for index in range(4)]
+            motion_clips = [root / f"motion_{index}.mp4" for index in range(4)]
+            for path in (*images, *voices, *motion_clips):
+                path.write_bytes(b"fixture")
+
+            recorded_commands = []
+
+            def record_command(args, **_kwargs):
+                recorded_commands.append(args)
+                Path(args[-1]).write_bytes(b"fixture output")
+                return unittest.mock.Mock(stdout="", returncode=0)
+
+            with patch.object(pipeline, "command", side_effect=record_command), patch.object(
+                pipeline, "duration", side_effect=[1.0, 1.0, 1.0, 1.0, 31.0]
+            ), patch.object(pipeline, "music"), patch.object(pipeline, "_caption_overlay"):
+                pipeline.render(
+                    scenes, images, voices, work_dir, root / "final.mp4", lambda *_args: None,
+                    seconds=31, motion_clips=motion_clips,
+                )
+
+        scene_commands = [
+            args for args in recorded_commands
+            if "-filter_complex" in args and "-frames:v" in args
+        ]
+        self.assertEqual(len(scene_commands), len(scenes))
+        expected_counts = [233, 233, 232, 232]
+        for args, expected_count in zip(scene_commands, expected_counts):
+            filter_graph = args[args.index("-filter_complex") + 1]
+            scene_layer = filter_graph.split(";", 1)[0]
+            self.assertLess(scene_layer.index("[0:v]"), scene_layer.index("zoompan"))
+            self.assertLess(scene_layer.index("zoompan"), scene_layer.index("[base]"))
+            self.assertIn(f"2*PI*on/{expected_count - 1}", scene_layer)
+            self.assertIn("[1:v]", filter_graph)
+            self.assertIn("overlay=", filter_graph)
+            frame_count_index = args.index("-frames:v")
+            self.assertEqual(int(args[frame_count_index + 1]), expected_count)
+
     def test_missing_local_motion_adapter_fails_without_loading_remote_models(self) -> None:
         import types
 
