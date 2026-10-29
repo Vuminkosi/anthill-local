@@ -1,29 +1,97 @@
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.11
+    environment:
+      # Ollama's GPU selector accepts an invalid device ID to force CPU inference.
+      # This service also intentionally receives no Compose GPU device reservation.
+      CUDA_VISIBLE_DEVICES: "-1"
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_KEEP_ALIVE: "0"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_QUEUE: "16"
     volumes:
       - ollama_models:/root/.ollama
-    environment:
-      - OLLAMA_NUM_GPU=0
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
+
+  ollama-model-setup:
+    image: ollama/ollama:0.40.11
+    environment:
+      CUDA_VISIBLE_DEVICES: "-1"
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - ollama show "$${OLLAMA_MODEL}" >/dev/null 2>&1 || ollama pull "$${OLLAMA_MODEL}"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
   anthill:
-    build: ./app
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: vuminkosimatibe/anthill:latest
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${ANTHILL_PORT:-8090}:8080"
     gpus: all
     environment:
-      - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=llama3.2:3b
-      - HF_HOME=/data/models/huggingface
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-      - IMAGE_MODEL=stabilityai/sd-turbo
-      - HF_HUB_DISABLE_TELEMETRY=1
+      ANTHILL_URL: http://127.0.0.1:8080
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      HF_HOME: /data/models/huggingface
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      IMAGE_MODEL: ${IMAGE_MODEL:-Lykon/dreamshaper-8}
+      IMAGE_MODEL_VARIANT: ${IMAGE_MODEL_VARIANT:-fp16}
+      IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
+      KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
+      KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
     volumes:
       - ./output:/data/output
       - ./models:/data/models
       - ./assets:/data/assets
+      - ./state:/data/state
     depends_on:
-      - ollama
+      model-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=3).read(1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
     restart: unless-stopped
+
+  model-setup:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    environment:
+      HF_HOME: /data/models/huggingface
+      HF_HUB_OFFLINE: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_TOKEN: ${HF_TOKEN:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
+      KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
+      KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
+    volumes:
+      - ./models:/data/models
+    command: ["python", "model_setup.py", "--all-approved"]
+    depends_on:
+      ollama-model-setup:
+        condition: service_completed_successfully
+    restart: "no"
+
 volumes:
   ollama_models:

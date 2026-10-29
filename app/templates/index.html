@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f8fa">
+  <title>AntHill Studio — Local video maker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='studio.css') }}">
+  <script src="{{ url_for('static', filename='studio.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#story">Skip to story</a>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="AntHill Studio home">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>AntHill <span class="brand-light">Studio</span></span>
+      </a>
+      <div class="topbar-tools">
+        <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Runs on this device</span>
+        <label class="theme-control" for="theme-select">Theme
+          <select id="theme-select" aria-label="Color theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">STORY TO SCREEN</p>
+        <h1 id="page-title">Make a little story<br class="desktop-break"> feel big.</h1>
+        <p class="intro-copy">Turn a story into a narrated motion comic, ready to share. Your story and models stay on this computer.</p>
+      </section>
+
+      <section id="model-readiness" class="readiness-panel" aria-labelledby="readiness-title" aria-live="polite" hidden>
+        <span id="readiness-icon" class="readiness-icon" aria-hidden="true">✓</span>
+        <div class="readiness-copy">
+          <h2 id="readiness-title">Checking your local studio…</h2>
+          <p id="readiness-description"></p>
+          <ul id="model-list" class="model-list" aria-label="Local generation models"></ul>
+          <p id="readiness-setup" class="readiness-setup" hidden>In PowerShell, run <code>.\scripts\install-models.ps1</code> from the project folder, then check again.</p>
+        </div>
+        <button id="readiness-refresh" class="readiness-refresh" type="button">Check again</button>
+      </section>
+
+      <div class="work-grid">
+        <section class="editor-panel" aria-labelledby="editor-title">
+          <div class="panel-heading">
+            <div>
+              <p class="step-label"><span>01</span> &nbsp;YOUR STORY</p>
+              <h2 id="editor-title">Start with a moment</h2>
+            </div>
+            <span class="local-pill">PRIVATE BY DEFAULT</span>
+          </div>
+
+          <form id="generate-form" novalidate>
+            <label class="field-label" for="story">What happened?</label>
+            <p class="field-help" id="story-help">Paste a true story or a scene you want to tell. A few sentences work best.</p>
+            <textarea id="story" name="story" minlength="25" maxlength="6000" aria-describedby="story-help story-error story-count" placeholder="A small act of kindness changed someone's day…" required></textarea>
+            <div class="field-meta">
+              <span id="story-error" class="field-error" role="alert"></span>
+              <div class="field-actions">
+                <button id="example-story" class="text-button" type="button">Use example story</button>
+                <span id="story-count" class="character-count">0 / 6,000</span>
+              </div>
+            </div>
+
+            <fieldset class="duration-fieldset">
+              <legend class="field-label">Video length</legend>
+              <div class="duration-options">
+                <label class="duration-option"><input type="radio" name="duration" value="30" checked><span><strong>30</strong><small>seconds</small></span></label>
+                <label class="duration-option"><input type="radio" name="duration" value="45"><span><strong>45</strong><small>seconds</small></span></label>
+                <label class="duration-option"><input type="radio" name="duration" value="60"><span><strong>60</strong><small>seconds</small></span></label>
+              </div>
+            </fieldset>
+
+            <button class="primary-button" id="generate-button" type="submit">
+              <span class="button-icon" aria-hidden="true">✳</span>
+              <span>Generate my video</span>
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+            <p class="privacy-note"><span aria-hidden="true">⌑</span> Avoid including private details about people without their permission.</p>
+          </form>
+        </section>
+
+        <aside class="output-column" aria-label="Video output and recent videos">
+          <section class="output-panel" aria-labelledby="output-title">
+            <div class="panel-heading output-heading">
+              <div>
+                <p class="step-label"><span>02</span> &nbsp;YOUR VIDEO</p>
+                <h2 id="output-title">The story, in motion</h2>
+              </div>
+              <span class="format-tag">9:16</span>
+            </div>
+
+            <div id="empty-output" class="empty-output">
+              <div class="portrait-placeholder" aria-hidden="true">
+                <div class="sun"></div><div class="hill hill-back"></div><div class="hill hill-front"></div>
+                <div class="placeholder-caption"><i></i><i></i></div>
+                <span class="play-mark">▶</span>
+              </div>
+              <p class="empty-title">Your next story goes here</p>
+              <p class="empty-copy">A sequence of illustrated scenes, gentle camera movement, narration and subtitles.</p>
+            </div>
+
+            <div id="job-output" class="job-output" hidden>
+              <div class="job-state-row">
+                <span id="job-state-icon" class="job-state-icon" aria-hidden="true">◌</span>
+                <div class="job-state-copy">
+                  <p id="job-state-title" class="job-state-title">Getting things ready…</p>
+                  <p id="job-progress-text" class="job-progress-text" aria-live="polite" aria-atomic="true"></p>
+                </div>
+                <span id="job-percent" class="job-percent"></span>
+              </div>
+              <div id="progress-track" class="progress-track" role="progressbar" aria-label="Video creation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="progress-bar"></span>
+              </div>
+              <div id="video-result" class="video-result" hidden>
+                <video id="video-player" controls playsinline preload="metadata" aria-label="Your finished story video"></video>
+                <a id="download-link" class="download-button" href="#" download>Download video <span aria-hidden="true">↓</span></a>
+              </div>
+              <div id="job-error" class="job-error" role="alert" hidden>
+                <p class="error-title">This video could not be finished.</p>
+                <p id="job-error-text"></p>
+                <button id="retry-button" class="secondary-button" type="button">Try again</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="recent-section" aria-labelledby="recent-title">
+            <div class="recent-heading">
+              <h2 id="recent-title">Recent videos</h2>
+              <span id="recent-count" class="recent-count">0</span>
+            </div>
+            <p id="recent-empty" class="recent-empty">Finished videos will be saved here.</p>
+            <ul id="recent-list" class="recent-list" aria-label="Recent videos"></ul>
+          </section>
+        </aside>
+      </div>
+      <footer class="page-footer"><span>AntHill Studio</span><span>Locally made, ready to share</span></footer>
+    </main>
+  </div>
+</body>
+</html>

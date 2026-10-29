@@ -1,0 +1,2 @@
+# Shared MCP SDK for the app-container stdio server and host-side dev tools.
+mcp==1.28.1

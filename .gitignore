@@ -1,0 +1,9 @@
+.env
+.env.example
+/models/*
+/output/*
+/state/*
+__pycache__/
+*.py[cod]
+.venv*/
+/artifacts/

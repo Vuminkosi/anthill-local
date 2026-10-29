@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "anthill-local": {
+      "command": "docker",
+      "args": [
+        "compose",
+        "-f",
+        "C:/DevOps/anthill-local/compose.yaml",
+        "exec",
+        "-T",
+        "-e",
+        "ANTHILL_URL=http://127.0.0.1:8080",
+        "anthill",
+        "python",
+        "mcp_server.py"
+      ]
+    }
+  }
+}
