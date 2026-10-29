@@ -61,11 +61,38 @@
             <label class="field-label" for="story">What happened?</label>
             <p class="field-help" id="story-help">Paste a true story or a scene you want to tell. A few sentences work best.</p>
             <textarea id="story" name="story" minlength="25" maxlength="6000" aria-describedby="story-help story-error story-count" placeholder="A small act of kindness changed someone's day…" required></textarea>
+            <p id="story-recovery-note" class="story-recovery-note" role="status" hidden>This tab does not have the original story. Paste it here to create a version, or enter a different story for a new video. The existing MP4 will remain unchanged.</p>
             <div class="field-meta">
               <span id="story-error" class="field-error" role="alert"></span>
               <div class="field-actions">
                 <button id="example-story" class="text-button" type="button">Use example story</button>
                 <span id="story-count" class="character-count">0 / 6,000</span>
+              </div>
+            </div>
+
+            <div class="direction-fields">
+              <div class="direction-field">
+                <label class="field-label" for="tone">Story tone</label>
+                <p class="field-help" id="tone-help">Choose the feeling that should guide the narration and scenes.</p>
+                <select id="tone" name="tone" aria-describedby="tone-help">
+                  <option value="heartfelt" selected>Heartfelt</option>
+                  <option value="uplifting">Uplifting</option>
+                  <option value="dramatic">Dramatic</option>
+                  <option value="comedic">Comedic</option>
+                  <option value="suspenseful">Suspenseful</option>
+                </select>
+              </div>
+              <div class="direction-field">
+                <label class="field-label" for="character">Character to feature <span class="optional-label">Optional</span></label>
+                <p class="field-help" id="character-help">Enter a character's name or description to guide scenes.</p>
+                <input id="character" name="character" type="text" maxlength="500" aria-describedby="character-help character-count">
+                <span id="character-count" class="character-count">0 / 500</span>
+              </div>
+              <div class="direction-field direction-field-wide">
+                <label class="field-label" for="adjustments">Changes to apply <span class="optional-label">Optional</span></label>
+                <p class="field-help" id="adjustments-help">Describe what you would like changed in this version.</p>
+                <textarea id="adjustments" name="adjustments" maxlength="1000" rows="3" aria-describedby="adjustments-help adjustments-count" placeholder="For example: make the ending gentler and keep the scenes focused on the two friends."></textarea>
+                <span id="adjustments-count" class="character-count">0 / 1,000</span>
               </div>
             </div>
 
@@ -83,6 +110,7 @@
               <span>Generate my video</span>
               <span class="button-arrow" aria-hidden="true">→</span>
             </button>
+            <p id="regenerate-note" class="regenerate-note" hidden>Adjust the story or direction above, then create a new video. This will not edit the existing MP4.</p>
             <p class="privacy-note"><span aria-hidden="true">⌑</span> Avoid including private details about people without their permission.</p>
           </form>
         </section>
@@ -119,6 +147,18 @@
               <div id="progress-track" class="progress-track" role="progressbar" aria-label="Video creation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <span id="progress-bar"></span>
               </div>
+              <ol id="generation-phases" class="generation-phases" aria-label="Video generation phases">
+                <li data-phase="storyboard">Storyboard</li>
+                <li data-phase="narration">Narration</li>
+                <li data-phase="scenes">Illustrations</li>
+                <li data-phase="assembly">Assemble video</li>
+              </ol>
+              <span id="phase-announcement" class="visually-hidden" aria-live="polite" aria-atomic="true"></span>
+              <div class="job-cancel-row">
+                <button id="cancel-button" class="secondary-button cancel-button" type="button" hidden>Cancel generation</button>
+                <span id="cancel-status" class="cancel-status" aria-live="polite"></span>
+              </div>
+              <p id="cancelled-message" class="cancelled-message" role="status" hidden>No video was produced because generation was cancelled.</p>
               <div id="video-result" class="video-result" hidden>
                 <video id="video-player" controls playsinline preload="metadata" aria-label="Your finished story video"></video>
                 <a id="download-link" class="download-button" href="#" download>Download video <span aria-hidden="true">↓</span></a>
@@ -126,6 +166,7 @@
               <div id="job-error" class="job-error" role="alert" hidden>
                 <p class="error-title">This video could not be finished.</p>
                 <p id="job-error-text"></p>
+                <p id="retry-original-note" class="retry-original-note" hidden>Try again reuses the story and direction originally submitted for this video, even if you change the form.</p>
                 <button id="retry-button" class="secondary-button" type="button">Try again</button>
               </div>
             </div>

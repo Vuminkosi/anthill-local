@@ -30,6 +30,85 @@ else:
 
 @unittest.skipIf(pipeline is None, f"pipeline dependencies unavailable: {_IMPORT_ERROR}")
 class LocalInferenceContractTests(unittest.TestCase):
+    def test_progress_callback_keeps_legacy_one_and_two_argument_signatures(self) -> None:
+        calls = []
+
+        pipeline._progress(lambda message: calls.append((message,)), "Narrating", 12, "narration")
+        pipeline._progress(lambda message, percent: calls.append((message, percent)), "Scenes", 40, "scenes")
+
+        self.assertEqual(calls, [("Narrating",), ("Scenes", 40)])
+
+    def test_progress_callback_receives_optional_generation_phase(self) -> None:
+        calls = []
+
+        pipeline._progress(lambda message, percent, phase: calls.append((message, percent, phase)), "Scenes", 40, "scenes")
+
+        self.assertEqual(calls, [("Scenes", 40, "scenes")])
+
+    def test_storyboard_prompt_receives_tone_character_and_adjustments(self) -> None:
+        scenes = [
+            {"image": f"scene {index}", "caption": f"beat {index}", "narration": "spoken words " * 6}
+            for index in range(6)
+        ]
+        plan = {"character_bible": "A consistent character", "narration": "spoken words " * 18, "scenes": scenes}
+        response = unittest.mock.Mock(status_code=200)
+        response.iter_lines.return_value = [json.dumps({"response": json.dumps(plan), "done": True})]
+        session = unittest.mock.MagicMock()
+        session.__enter__.return_value = session
+        session.__exit__.return_value = False
+        session.post.return_value = response
+        story = "A botanist finds a lantern and helps a stranded village before dawn."
+        character = "Mara: silver braids, round glasses, green coat, brass leaf pin."
+        adjustments = "Make the revelation gently funny, then finish with a hopeful sunrise."
+
+        with patch.dict("os.environ", {"OLLAMA_URL": "http://ollama:11434"}), patch.object(
+            pipeline.requests, "Session", return_value=session
+        ), patch.object(pipeline, "_retry", side_effect=lambda operation, *_args, **_kwargs: operation()):
+            result = pipeline.storyboard(
+                story, tone="comedic", character=character, adjustments=adjustments
+            )
+
+        self.assertEqual(result, plan)
+        prompt = session.post.call_args.kwargs["json"]["prompt"]
+        self.assertIn('"comedic"', prompt)
+        self.assertIn(character, prompt)
+        self.assertIn(adjustments, prompt)
+        self.assertIn(story, prompt)
+
+    def test_legacy_storyboard_and_run_job_call_signatures_remain_supported(self) -> None:
+        story = "A traveler finds a lost dog and returns it before the storm."
+        plan = {
+            "character_bible": "A traveler and a small dog",
+            "narration": "The traveler returns the dog before the storm.",
+            "scenes": [
+                {"image": "A traveler", "caption": "A kind discovery", "narration": "spoken words " * 6}
+                for _ in range(6)
+            ],
+        }
+        with tempfile.TemporaryDirectory(prefix="anthill-legacy-call-") as temporary:
+            output = Path(temporary) / "output"
+            progress_messages = []
+            with patch.object(pipeline, "OUT", output), patch.object(
+                pipeline, "storyboard", return_value=plan
+            ) as storyboard, patch.object(pipeline, "narrate"), patch.object(
+                pipeline, "make_images", return_value=[]
+            ), patch.object(pipeline, "render"):
+                result = pipeline.run_job("legacy-signature", story, progress_messages.append)
+
+        self.assertEqual(result, output / "AntHill_legacy-signature.mp4")
+        self.assertEqual(storyboard.call_args.args, (story, 30, None, "heartfelt", "", ""))
+        self.assertTrue(progress_messages)
+
+    def test_run_job_checks_cancellation_before_storyboard_or_model_work(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="anthill-cancel-test-") as temporary:
+            output = Path(temporary) / "output"
+            with patch.object(pipeline, "OUT", output), patch.object(pipeline, "storyboard") as storyboard:
+                with self.assertRaises(pipeline.GenerationCancelled):
+                    pipeline.run_job("cancelled-test", "A sufficiently long story to pass validation.", lambda *_args: None,
+                                     cancelled=lambda: True)
+
+        storyboard.assert_not_called()
+
     def test_storyboard_rejects_remote_ollama_before_sending_story(self) -> None:
         with patch.dict("os.environ", {"OLLAMA_URL": "https://example.com"}), patch.object(
             pipeline.requests, "Session"

@@ -17,7 +17,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from model_setup import IMAGE_FILES, IMAGE_PATH, VOICE_FILES, VOICE_PATH
-from pipeline import ROOT, local_ollama_base, run_job
+from pipeline import GenerationCancelled, ROOT, local_ollama_base, run_job
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100_000
@@ -27,9 +27,12 @@ app.config["MAX_PENDING_JOBS"] = int(os.getenv("MAX_PENDING_JOBS", "10"))
 logger = logging.getLogger("anthill.server")
 _worker_lock = threading.Lock()
 _worker_started = False
+_job_cancel_lock = threading.Lock()
+_job_cancel_events: dict[str, threading.Event] = {}
 _valid_job_id = re.compile(r"^[a-f0-9]{12}$")
 _valid_video_name = re.compile(r"^AntHill_[a-f0-9]{12}\.mp4$")
 _durations = {30, 45, 60}
+_tones = {"heartfelt", "uplifting", "dramatic", "comedic", "suspenseful"}
 _public_error = "Video generation failed. Check the application logs, then retry this story."
 
 
@@ -50,6 +53,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def _initialize_database() -> None:
+    interrupted_cancellations = []
     with _connect() as connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute(
@@ -63,25 +67,52 @@ def _initialize_database() -> None:
                 video TEXT,
                 error TEXT,
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                tone TEXT NOT NULL DEFAULT 'heartfelt',
+                character TEXT NOT NULL DEFAULT '',
+                adjustments TEXT NOT NULL DEFAULT ''
             )"""
+        )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "phase" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'queued'")
+        if "tone" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN tone TEXT NOT NULL DEFAULT 'heartfelt'")
+        if "character" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN character TEXT NOT NULL DEFAULT ''")
+        if "adjustments" not in columns:
+            connection.execute("ALTER TABLE jobs ADD COLUMN adjustments TEXT NOT NULL DEFAULT ''")
+        now = time.time()
+        interrupted_cancellations = [
+            row["id"] for row in connection.execute("SELECT id FROM jobs WHERE status='cancelling'").fetchall()
+        ]
+        # Cancellation requests survive restarts as terminal cancellations.
+        connection.execute(
+            "UPDATE jobs SET status='cancelled', phase='cancelled', progress='Generation cancelled', "
+            "updated_at=? WHERE status='cancelling'", (now,),
         )
         # Jobs interrupted by an application restart are safe to run again:
         # every artifact is scoped to its job ID and the final file is atomic.
         connection.execute(
-            "UPDATE jobs SET status='queued', progress='Resuming after application restart', "
+            "UPDATE jobs SET status='queued', phase='queued', progress='Resuming after application restart', "
             "percent=0, updated_at=? WHERE status='working'",
             (time.time(),),
         )
+    for job_id in interrupted_cancellations:
+        _remove_job_artifacts(job_id)
 
 
 def _public_job(row: sqlite3.Row) -> dict:
     result = {
         "id": row["id"],
         "status": row["status"],
+        "phase": row["phase"] if "phase" in row.keys() else row["status"],
         "progress": row["progress"],
         "percent": row["percent"],
         "duration_seconds": row["duration_seconds"],
+        "tone": row["tone"] if "tone" in row.keys() else "heartfelt",
+        "character": row["character"] if "character" in row.keys() else "",
+        "adjustments": row["adjustments"] if "adjustments" in row.keys() else "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -143,7 +174,7 @@ def _claim_next_job():
             return None
         now = time.time()
         updated = connection.execute(
-            "UPDATE jobs SET status='working', progress='Starting local generation', percent=1, updated_at=? "
+            "UPDATE jobs SET status='working', phase='storyboard', progress='Starting local generation', percent=1, updated_at=? "
             "WHERE id=? AND status='queued'",
             (now, row["id"]),
         )
@@ -151,32 +182,67 @@ def _claim_next_job():
         return row["id"] if updated.rowcount == 1 else None
 
 
-def _update_progress(job_id: str, message: str, percent: int | None = None) -> None:
+def _update_progress(job_id: str, message: str, percent: int | None = None, phase: str | None = None) -> None:
     safe_message = str(message).strip()[:240] or "Working"
     bounded_percent = max(0, min(99, int(percent))) if percent is not None else None
     with _connect() as connection:
-        if bounded_percent is None:
+        safe_phase = phase if phase in {"queued", "storyboard", "narration", "scenes", "assembly", "complete", "cancelling", "cancelled", "error"} else None
+        if bounded_percent is None and safe_phase is None:
             connection.execute(
                 "UPDATE jobs SET progress=?, updated_at=? WHERE id=? AND status='working'",
                 (safe_message, time.time(), job_id),
             )
-        else:
+        elif bounded_percent is None:
+            connection.execute(
+                "UPDATE jobs SET progress=?, phase=?, updated_at=? WHERE id=? AND status='working'",
+                (safe_message, safe_phase, time.time(), job_id),
+            )
+        elif safe_phase is None:
             connection.execute(
                 "UPDATE jobs SET progress=?, percent=?, updated_at=? WHERE id=? AND status='working'",
                 (safe_message, bounded_percent, time.time(), job_id),
             )
+        else:
+            connection.execute(
+                "UPDATE jobs SET progress=?, percent=?, phase=?, updated_at=? WHERE id=? AND status='working'",
+                (safe_message, bounded_percent, safe_phase, time.time(), job_id),
+            )
+
+
+def _cancel_event(job_id: str) -> threading.Event:
+    with _job_cancel_lock:
+        return _job_cancel_events.setdefault(job_id, threading.Event())
+
+
+def _remove_job_artifacts(job_id: str, include_final: bool = True) -> None:
+    output_root = (ROOT / "output").resolve()
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", job_id)[:40]
+    working = (output_root / f"working_{safe_id}").resolve()
+    final = (output_root / f"AntHill_{safe_id}.mp4").resolve()
+    partial = (output_root / f"AntHill_{safe_id}.partial.mp4").resolve()
+    if working.parent == output_root and working.is_dir():
+        import shutil
+        shutil.rmtree(working, ignore_errors=True)
+    for path in (partial, final if include_final else None):
+        if path is not None and path.parent == output_root:
+            path.unlink(missing_ok=True)
 
 
 def _run_claimed_job(job_id: str) -> None:
     row = _get_job(job_id)
     if row is None:
         return
+    cancelled = _cancel_event(job_id)
     try:
         output = run_job(
             job_id,
             row["story"],
-            lambda message, percent=None: _update_progress(job_id, message, percent),
+            lambda message, percent=None, phase=None: _update_progress(job_id, message, percent, phase),
             duration_seconds=row["duration_seconds"],
+            cancelled=cancelled.is_set,
+            tone=row["tone"],
+            character=row["character"],
+            adjustments=row["adjustments"],
         )
         expected_name = f"AntHill_{job_id}.mp4"
         output_path = Path(output).resolve()
@@ -184,20 +250,54 @@ def _run_claimed_job(job_id: str) -> None:
         if output_path.parent != output_root or output_path.name != expected_name or not output_path.is_file():
             raise RuntimeError("Video pipeline returned an unexpected output path")
         with _connect() as connection:
-            connection.execute(
-                "UPDATE jobs SET status='done', progress='Video ready', percent=100, video=?, error=NULL, updated_at=? "
-                "WHERE id=? AND status='working'",
-                (expected_name, time.time(), job_id),
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE jobs SET status='done', phase='complete', progress='Video ready', percent=100, video=?, error=NULL, updated_at=? "
+                "WHERE id=? AND status='working' AND ?=0",
+                (expected_name, time.time(), job_id, int(cancelled.is_set())),
             )
+            connection.commit()
+        if updated.rowcount != 1:
+            _remove_job_artifacts(job_id)
+            with _connect() as connection:
+                connection.execute(
+                    "UPDATE jobs SET status='cancelled', phase='cancelled', progress='Generation cancelled', video=NULL, "
+                    "error=NULL, updated_at=? WHERE id=? AND status IN ('working','cancelling')",
+                    (time.time(), job_id),
+                )
+            return
         logger.info("Video job %s completed", job_id)
+    except GenerationCancelled:
+        _remove_job_artifacts(job_id)
+        with _connect() as connection:
+            connection.execute(
+                "UPDATE jobs SET status='cancelled', phase='cancelled', progress='Generation cancelled', video=NULL, "
+                "error=NULL, updated_at=? WHERE id=? AND status IN ('working','cancelling')",
+                (time.time(), job_id),
+            )
+        logger.info("Video job %s cancelled", job_id)
     except Exception as exc:
         # Third-party failures can echo prompts; record the failure category without exception text.
         logger.error("Video job %s failed (%s)", job_id, type(exc).__name__)
         with _connect() as connection:
-            connection.execute(
-                "UPDATE jobs SET status='error', progress='Generation failed', error=?, updated_at=? WHERE id=?",
-                (_public_error, time.time(), job_id),
-            )
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if current is not None and current["status"] in {"cancelling", "cancelled"}:
+                connection.execute(
+                    "UPDATE jobs SET status='cancelled', phase='cancelled', progress='Generation cancelled', video=NULL, "
+                    "error=NULL, updated_at=? WHERE id=? AND status IN ('working','cancelling','cancelled')",
+                    (time.time(), job_id),
+                )
+                should_cleanup = True
+            else:
+                connection.execute(
+                    "UPDATE jobs SET status='error', phase='error', progress='Generation failed', error=?, updated_at=? WHERE id=? AND status='working'",
+                    (_public_error, time.time(), job_id),
+                )
+                should_cleanup = False
+            connection.commit()
+        if should_cleanup:
+            _remove_job_artifacts(job_id)
 
 
 def _worker_loop() -> None:
@@ -269,6 +369,17 @@ def start_job():
     requested_duration = payload.get("duration_seconds", 30)
     if isinstance(requested_duration, bool) or not isinstance(requested_duration, int) or requested_duration not in _durations:
         return jsonify(error="Choose a 30, 45, or 60-second video."), 400
+    tone = payload.get("tone", "heartfelt")
+    if not isinstance(tone, str) or tone not in _tones:
+        return jsonify(error="Choose a supported story tone."), 400
+    character = payload.get("character", "")
+    if not isinstance(character, str) or len(character) > 500:
+        return jsonify(error="Character guidance must be 500 characters or fewer."), 400
+    adjustments = payload.get("adjustments", "")
+    if not isinstance(adjustments, str) or len(adjustments) > 1000:
+        return jsonify(error="Adjustments must be 1,000 characters or fewer."), 400
+    character = character.strip()
+    adjustments = adjustments.strip()
     models_ready, models = _local_model_status()
     if not models_ready:
         return jsonify(error="Local models are still being installed or are unavailable. Check readiness and retry.", models=models), 503
@@ -277,18 +388,56 @@ def start_job():
     now = time.time()
     with _connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
-        pending = connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','working')").fetchone()[0]
+        pending = connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','working','cancelling')").fetchone()[0]
         if pending >= app.config["MAX_PENDING_JOBS"]:
             connection.rollback()
             return jsonify(error="The video queue is full. Please try again shortly."), 503
         connection.execute(
-            "INSERT INTO jobs(id,story,duration_seconds,status,progress,percent,created_at,updated_at) "
-            "VALUES(?,?,?,'queued','Waiting for the local generator',0,?,?)",
-            (job_id, story, requested_duration, now, now),
+            "INSERT INTO jobs(id,story,duration_seconds,status,phase,progress,percent,created_at,updated_at,tone,character,adjustments) "
+            "VALUES(?,?,?,'queued','queued','Waiting for the local generator',0,?,?,?,?,?)",
+            (job_id, story, requested_duration, now, now, tone, character, adjustments),
         )
         connection.commit()
     logger.info("Queued video job %s (%ss)", job_id, requested_duration)
-    return jsonify(id=job_id, status="queued"), 202
+    return jsonify(id=job_id, status="queued", phase="queued", tone=tone,
+                   character=character, adjustments=adjustments), 202
+
+
+@app.post("/api/jobs/<job_id>/cancel")
+def cancel_job(job_id: str):
+    if not _valid_job_id.fullmatch(job_id):
+        return jsonify(error="Video job not found."), 404
+    with _connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row is None:
+            connection.rollback()
+            return jsonify(error="Video job not found."), 404
+        status = row["status"]
+        if status == "queued":
+            connection.execute(
+                "UPDATE jobs SET status='cancelled', phase='cancelled', progress='Cancelled before generation', "
+                "video=NULL, error=NULL, updated_at=? WHERE id=? AND status='queued'",
+                (time.time(), job_id),
+            )
+            connection.commit()
+            _cancel_event(job_id).set()
+            return jsonify(id=job_id, status="cancelled", phase="cancelled"), 200
+        if status == "working":
+            event = _cancel_event(job_id)
+            event.set()
+            connection.execute(
+                "UPDATE jobs SET status='cancelling', phase='cancelling', progress='Stopping generation', updated_at=? "
+                "WHERE id=? AND status='working'",
+                (time.time(), job_id),
+            )
+            connection.commit()
+            return jsonify(id=job_id, status="cancelling", phase="cancelling"), 202
+        connection.commit()
+        if status == "cancelling":
+            _cancel_event(job_id).set()
+            return jsonify(id=job_id, status="cancelling", phase="cancelling"), 202
+        return jsonify(error="This video can no longer be cancelled.", status=status), 409
 
 
 @app.get("/api/jobs")
@@ -327,12 +476,12 @@ def retry_job(job_id: str):
         if row["status"] != "error":
             connection.rollback()
             return jsonify(error="Only failed videos can be retried."), 409
-        pending = connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','working')").fetchone()[0]
+        pending = connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','working','cancelling')").fetchone()[0]
         if pending >= app.config["MAX_PENDING_JOBS"]:
             connection.rollback()
             return jsonify(error="The video queue is full. Please try again shortly."), 503
         connection.execute(
-            "UPDATE jobs SET status='queued', progress='Waiting for retry', percent=0, video=NULL, error=NULL, updated_at=? WHERE id=?",
+            "UPDATE jobs SET status='queued', phase='queued', progress='Waiting for retry', percent=0, video=NULL, error=NULL, updated_at=? WHERE id=?",
             (time.time(), job_id),
         )
         connection.commit()
