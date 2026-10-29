@@ -25,6 +25,8 @@ import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from model_setup import (
+    ANIMATION_FILES,
+    ANIMATION_PATH,
     IMAGE_PATH,
     KOKORO_CONFIG_FILE,
     KOKORO_MODEL_FILE,
@@ -40,6 +42,8 @@ LINUX_FONT = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
 WINDOWS_FONT = Path("C:/Windows/Fonts/arialbd.ttf")
 APPROVED_IMAGE_MODEL = "Lykon/dreamshaper-8"
 APPROVED_IMAGE_REVISION = "a7e52b98680b1ba8ff7bce97c7f9f2e2e5337917"
+APPROVED_MOTION_MODEL = "guoyww/animatediff-motion-adapter-v1-5-2"
+APPROVED_MOTION_REVISION = "504374388860e52e206813f44f1ab60a3814152a"
 SCENE_COUNT = 6
 logger = logging.getLogger("anthill.pipeline")
 Progress = Callable[..., None]
@@ -486,6 +490,135 @@ def make_images(scenes: list[dict], character_bible: str, work_dir: Path, progre
         ) from exc
 
 
+def _motion_model_path() -> Path:
+    return ANIMATION_PATH
+
+
+def make_motion_clips(scenes: list[dict], images: list[Path], character_bible: str,
+                      work_dir: Path, progress: Progress,
+                      cancelled: Callable[[], bool] | None = None) -> list[Path]:
+    """Animate each generated still using the local SD1.5 motion adapter."""
+    import torch
+    from diffusers import AnimateDiffVideoToVideoPipeline, MotionAdapter
+
+    if len(scenes) != len(images) or not scenes:
+        raise ValueError("Motion generation requires one generated still for every scene")
+    adapter_path = _motion_model_path()
+    missing = [name for name in ANIMATION_FILES if not (adapter_path / name).is_file()]
+    if missing:
+        raise RuntimeError("The local AnimateDiff motion adapter is missing required files. Install the approved "
+                           "AnimateDiff 1.5.2 model inside the app container, then retry; runtime generation "
+                           "never downloads model files.")
+    base_path = _local_model_path()
+    base_weight = base_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
+    if not base_weight.is_file():
+        raise RuntimeError("The approved DreamShaper 8 FP16 model is missing; runtime generation never downloads models")
+
+    width = int(os.getenv("ANIMATEDIFF_WIDTH", "384"))
+    height = int(os.getenv("ANIMATEDIFF_HEIGHT", "672"))
+    frames = int(os.getenv("ANIMATEDIFF_FRAMES", "16"))
+    if width > 384 or height > 672 or width < 256 or height < 448 or width % 8 or height % 8:
+        raise ValueError("AnimateDiff dimensions must be divisible by 8 and within 256x448 to 384x672")
+    if frames < 8 or frames > 24:
+        raise ValueError("AnimateDiff frame count must be between 8 and 24")
+    steps = int(os.getenv("ANIMATEDIFF_STEPS", "12"))
+    if not 4 <= steps <= 20:
+        raise ValueError("AnimateDiff inference steps must be between 4 and 20")
+
+    logger.info("Loading local AnimateDiff adapter %s with DreamShaper (%sx%s, %s frames)",
+                adapter_path, width, height, frames)
+    clips: list[Path] = []
+    pipe = None
+    try:
+        motion_adapter = MotionAdapter.from_pretrained(
+            str(adapter_path), torch_dtype=torch.float16, variant="fp16",
+            use_safetensors=True, local_files_only=True,
+        )
+        pipe = AnimateDiffVideoToVideoPipeline.from_pretrained(
+            str(base_path), motion_adapter=motion_adapter, torch_dtype=torch.float16,
+            variant="fp16", use_safetensors=True, local_files_only=True, low_cpu_mem_usage=True,
+        )
+        if hasattr(pipe, "enable_vae_slicing"):
+            pipe.enable_vae_slicing()
+        if hasattr(pipe, "enable_vae_tiling"):
+            pipe.enable_vae_tiling()
+        if hasattr(pipe, "enable_attention_slicing"):
+            pipe.enable_attention_slicing("max")
+        pipe.enable_model_cpu_offload()
+        supports_callback = "callback_on_step_end" in inspect.signature(pipe.__call__).parameters
+
+        for index, (scene, image_path) in enumerate(zip(scenes, images)):
+            _check_cancelled(cancelled)
+            _progress(progress, f"Animating scene {index + 1}/{len(scenes)} with AnimateDiff...",
+                      60 + index * 2, "animation")
+            source = Image.open(image_path).convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+            seed = int(os.getenv("ANIMATEDIFF_SEED", "9142")) + index
+            prompt = (scene["image"][:420] + ", consistent character: " + character_bible[:180]
+                      + ", expressive 3D cartoon animation, subtle natural body and camera movement, coherent motion")
+            negative = "text, subtitles, watermark, flicker, duplicated limbs, deformed face, inconsistent character"
+
+            def generate(current_width: int, current_height: int, current_frames: int):
+                _check_cancelled(cancelled)
+                frames_in = [source.resize((current_width, current_height), Image.Resampling.LANCZOS)] * current_frames
+
+                def on_step(*callback_args):
+                    _check_cancelled(cancelled)
+                    callback_kwargs = callback_args[-1] if callback_args and isinstance(callback_args[-1], dict) else {}
+                    return callback_kwargs
+
+                options = {"callback_on_step_end": on_step} if supports_callback else {}
+                generator = torch.Generator(device="cpu").manual_seed(seed)
+                result = pipe(video=[frames_in], prompt=prompt, negative_prompt=negative,
+                              height=current_height, width=current_width,
+                              num_inference_steps=steps, guidance_scale=7.0, strength=0.55,
+                              generator=generator, **options)
+                _check_cancelled(cancelled)
+                return result.frames[0]
+
+            try:
+                try:
+                    generated = generate(width, height, frames)
+                except RuntimeError as exc:
+                    if "out of memory" not in str(exc).lower() or (width <= 320 and frames <= 8):
+                        raise
+                    logger.warning("AnimateDiff ran out of memory; retrying scene once at 320x560 with 8 frames")
+                    del exc
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    generated = generate(320, 560, 8)
+                clip = work_dir / f"motion_{index:02d}.mp4"
+                frame_dir = work_dir / f"motion_frames_{index:02d}"
+                frame_dir.mkdir(parents=True, exist_ok=True)
+                for frame_index, frame in enumerate(generated):
+                    _check_cancelled(cancelled)
+                    frame.save(frame_dir / f"frame_{frame_index:04d}.png")
+                command(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-framerate", "8",
+                         "-i", str(frame_dir / "frame_%04d.png"), "-an", "-c:v", "libx264",
+                         "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", str(clip)],
+                        timeout=300, cancelled=cancelled)
+                clips.append(clip)
+            except GenerationCancelled:
+                raise
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        return clips
+    except Exception:
+        for clip in work_dir.glob("motion_*.mp4"):
+            clip.unlink(missing_ok=True)
+        for frame_directory in work_dir.glob("motion_frames_*"):
+            if frame_directory.is_dir():
+                import shutil
+                shutil.rmtree(frame_directory, ignore_errors=True)
+        raise
+    finally:
+        if pipe is not None:
+            del pipe
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def card(image: Image.Image, caption: str, path: Path) -> None:
     canvas = image.convert("RGB").resize((1080, 1920), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -514,6 +647,33 @@ def card(image: Image.Image, caption: str, path: Path) -> None:
         draw.text(((1080 - box[2]) / 2, y + line_index * line_height), line, font=font,
                   fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0, 255))
     path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path)
+
+
+def _caption_overlay(caption: str, path: Path) -> None:
+    canvas = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.truetype(str(_caption_font_path()), 52)
+    lines: list[str] = []
+    current = ""
+    for word in str(caption).split():
+        candidate = (current + " " + word).strip()
+        if draw.textbbox((0, 0), candidate, font=font)[2] > 960 and current:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    lines = lines[:3]
+    line_height = 72
+    y = 360
+    draw.rounded_rectangle((48, y - 28, 1032, y + line_height * len(lines) + 22),
+                           radius=26, fill=(0, 0, 0, 178))
+    for line_index, line in enumerate(lines):
+        box = draw.textbbox((0, 0), line, font=font)
+        draw.text(((1080 - box[2]) / 2, y + line_index * line_height), line, font=font,
+                  fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0, 255))
     canvas.save(path)
 
 
@@ -601,29 +761,41 @@ def _escape_subtitle_filter(path: Path) -> str:
 
 def render(scenes: list[dict], images: list[Path], voices: list[Path], work_dir: Path,
            final_path: Path, progress: Progress, seconds: int = 30,
-           cancelled: Callable[[], bool] | None = None) -> None:
+           cancelled: Callable[[], bool] | None = None,
+           motion_clips: list[Path] | None = None) -> None:
+    if motion_clips is not None and (len(motion_clips) != len(scenes) or any(not path.is_file() for path in motion_clips)):
+        raise RuntimeError("AnimateDiff did not produce a complete motion clip for every scene")
     clips = []
     scene_frames = [seconds * 30 // len(scenes)] * len(scenes)
     for index in range(seconds * 30 % len(scenes)):
         scene_frames[index] += 1
     for index, (scene, image_path, frame_count) in enumerate(zip(scenes, images, scene_frames)):
         _check_cancelled(cancelled)
-        _progress(progress, f"Animating scene {index + 1}/{len(scenes)}...", 70 + index * 3, "assembly")
-        captioned = work_dir / f"caption_{index}.png"
-        card(Image.open(image_path), scene["caption"], captioned)
+        _progress(progress, f"Assembling scene {index + 1}/{len(scenes)}...", 70 + index * 3, "assembly")
         clip = work_dir / f"part_{index:02d}.mp4"
         fps = 30
-        zoom = f"zoompan=z='min(1+on*0.00035,1.07)':d=1:s=1080x1920:fps={fps}"
-        command([
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(captioned),
-            "-vf", f"{zoom},format=yuv420p", "-frames:v", str(frame_count), "-an", "-c:v", "libx264",
-            "-preset", "veryfast", "-crf", "22", str(clip),
-        ], timeout=300, cancelled=cancelled)
+        scene_duration = frame_count / fps
+        if motion_clips is None:
+            # Keep direct legacy render callers compatible. Production run_job always supplies clips.
+            captioned = work_dir / f"caption_{index}.png"
+            card(Image.open(image_path), scene["caption"], captioned)
+            zoom = f"zoompan=z='min(1+on*0.00035,1.07)':d=1:s=1080x1920:fps={fps}"
+            command(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(captioned),
+                     "-vf", f"{zoom},format=yuv420p", "-frames:v", str(frame_count), "-an", "-c:v", "libx264",
+                     "-preset", "veryfast", "-crf", "22", str(clip)], timeout=300, cancelled=cancelled)
+        else:
+            overlay = work_dir / f"caption_overlay_{index}.png"
+            _caption_overlay(scene["caption"], overlay)
+            command(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-stream_loop", "-1", "-i",
+                     str(motion_clips[index]), "-loop", "1", "-i", str(overlay), "-filter_complex",
+                     "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30,setsar=1[base];"
+                     "[1:v]format=rgba[caption];[base][caption]overlay=0:0:shortest=1,format=yuv420p[out]",
+                     "-map", "[out]", "-frames:v", str(frame_count), "-an", "-c:v", "libx264",
+                     "-preset", "veryfast", "-crf", "22", str(clip)], timeout=300, cancelled=cancelled)
         clips.append(clip)
 
         # Keep scene narration within its scene; gently time-stretch and pad as needed.
         voice_duration = duration(voices[index], cancelled)
-        scene_duration = frame_count / fps
         tempo = voice_duration / scene_duration
         tempo_filters = []
         while tempo > 2.0:
@@ -706,7 +878,11 @@ def run_job(job_id: str, story: str, progress: Progress, duration_seconds: int =
             _progress(progress, f"Recording narration {index + 1}/{len(plan['scenes'])}...", 12 + index, "narration")
         images = make_images(plan["scenes"], plan["character_bible"], work_dir, progress, cancelled)
         _check_cancelled(cancelled)
-        render(plan["scenes"], images, voices, work_dir, final, progress, duration_seconds, cancelled)
+        motion_clips = make_motion_clips(plan["scenes"], images, plan["character_bible"],
+                                         work_dir, progress, cancelled)
+        _check_cancelled(cancelled)
+        render(plan["scenes"], images, voices, work_dir, final, progress, duration_seconds,
+               cancelled, motion_clips=motion_clips)
         _check_cancelled(cancelled)
         logger.info("Completed local motion-comic job %s: %s", job_id, final.name)
         return final

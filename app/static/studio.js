@@ -264,8 +264,8 @@
   }
 
   function updatePhases(phase) {
-    const sequence = ["storyboard", "narration", "scenes", "assembly"];
-    const labels = { storyboard: "Storyboard", narration: "Narration", scenes: "Illustrations", assembly: "Assemble video", complete: "Video assembly complete" };
+    const sequence = ["storyboard", "narration", "scenes", "animation", "assembly"];
+    const labels = { storyboard: "Storyboard", narration: "Narration", scenes: "Illustrations", animation: "Animation", assembly: "Assemble video", complete: "Video assembly complete" };
     const completeAt = phase === "complete" ? sequence.length : sequence.indexOf(phase);
     phaseItems.forEach((item, index) => {
       const complete = completeAt >= 0 && index < completeAt;

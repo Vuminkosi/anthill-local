@@ -346,6 +346,20 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "models-needed")
 
+    def test_readiness_exposes_animation_state_without_starting_model_setup(self) -> None:
+        models = {
+            "image": {"installed": True},
+            "narration": {"installed": True},
+            "storyboard": {"installed": True},
+            "animation": {"name": "AnimateDiff 1.5.2", "installed": False},
+        }
+        with patch.object(server, "_local_model_status", return_value=(False, models)) as status:
+            response = self.client.get("/api/readiness")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["models"]["animation"], models["animation"])
+        status.assert_called_once_with()
+
     def test_readiness_rejects_partial_dreamshaper_snapshot(self) -> None:
         image_path = self.root / "models" / "huggingface" / "dreamshaper"
         for relative in (

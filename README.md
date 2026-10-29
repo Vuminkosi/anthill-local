@@ -2,11 +2,11 @@
 
 AntHill turns a short story into a locally generated vertical motion comic. Paste a story, choose **30, 45, or 60 seconds**, and select **Generate**. The output is an H.264/AAC MP4 at **1080 × 1920** with scene illustrations, gentle camera movement, spoken narration, burned-in subtitles, and an original synthesized ambient music bed.
 
-This is a motion comic: generated still images move through camera effects. It does not make continuous, full-body character animation. Images are generated at a lower resolution to fit an 8 GB GPU, then enlarged for export. DreamShaper reference-image prompting helps keep the recurring character similar between scenes, but image generation cannot guarantee identical faces or details. Kokoro produces natural English speech; it has limited direct control over emotional acting.
+The pipeline animates each illustrated scene into a short generated motion clip, then loops clips as needed while assembling the full narration-led video. This creates scene motion, but not continuous full-body animation throughout the finished video. Images and motion clips are generated at reduced resolution for 8 GB GPUs, then enlarged for export. DreamShaper reference-image prompting helps keep recurring characters similar, but exact identity is not guaranteed. Kokoro produces natural English speech with limited direct control over emotional acting.
 
 All story planning, image generation, narration, and video assembly run locally in Docker. No host Python or Ollama installation is required. Ollama cloud features are disabled. Model downloads are needed for initial installation; inference does not require paid APIs or send prompts to a hosted model service. Docker images and Python packages also need internet access when first installed.
 
-**Runtime validation is incomplete in the current environment.** Docker Compose parses and NVIDIA GPU passthrough to an `nvidia-smi` container check passed, but Docker Engine HTTP 500 errors and timeouts have blocked the app image build and model setup. No AI weights are installed. GPU tensor inference, MP4 generation, and browser validation remain **NOT VERIFIED**.
+**Validation status:** The Docker app image has built, DreamShaper, Kokoro, and AnimateDiff model setup completed, and NVIDIA GPU passthrough was verified on an RTX 5050 with 8 GB VRAM. A 16-frame 384 × 672 AnimateDiff GPU clip was generated, and its first and last frames were nonidentical. The full automated test suite ran in Docker: 52 passed and 1 was skipped. Complete 30–60-second story-to-MP4 generation and browser playback remain **NOT VERIFIED**.
 
 ## Requirements
 
@@ -15,7 +15,9 @@ All story planning, image generation, narration, and video assembly run locally 
 - 32 GB system RAM is recommended.
 - At least 20 GB of free disk space is a practical starting point for the model files, Docker images, Python dependencies, caches, and outputs. Keep additional space available for videos and temporary render files.
 
-The setup pins selected model revisions and downloads only the FP16 DreamShaper components required for inference. Download size is about 2.2 GB for DreamShaper, roughly 360 MB for Kokoro and its selected voice, and about 2 GB for the Llama 3.2 3B Ollama model. Total model downloads are approximately 4.6 GB; supporting container and package downloads add more.
+The setup pins selected model revisions and downloads the FP16 model files for local inference. Current model downloads are about 2.2 GB for DreamShaper, roughly 360 MB for Kokoro and its selected voice, and about 2 GB for Llama 3.2 3B. The approved AnimateDiff motion adapter adds approximately 1.82 GB, bringing the expected total to about 6.4 GB; supporting container and package downloads add more. Actual sizes can vary slightly by file selection and download metadata.
+
+The pipeline now includes an AnimateDiff animation phase. It uses the pinned FP16 adapter, [`guoyww/animatediff-motion-adapter-v1-5-2`](https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2), with the existing DreamShaper model components. Adapter files are stored under `models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2` and persist across container restarts. Model downloads run in the Docker model-setup service; inference uses local files and does not fetch models at runtime. A short 16-frame 384 × 672 GPU smoke clip was verified on an RTX 5050 with 8 GB VRAM. Complete 30–60-second real-story video generation has not yet been verified.
 
 ## Install and start
 
@@ -31,13 +33,13 @@ From the folder containing `compose.yaml`, verify the Compose file:
 docker compose config --quiet
 ```
 
-From the folder containing `compose.yaml`, run this single command. Compose builds the app, starts Ollama, downloads the approved Llama 3.2 model, then runs the DreamShaper and Kokoro model setup service before starting the web app. The first start downloads about 4.6 GB of model files and needs internet access. Later starts reuse the models stored in `models` and the Ollama volume:
+From the folder containing `compose.yaml`, run this single command. Compose builds the app, starts Ollama, downloads the approved Llama 3.2 model, then runs Docker model setup for DreamShaper, Kokoro, and the AnimateDiff adapter before starting the web app. The initial model download is approximately 6.4 GB and needs internet access. Later starts reuse files stored in `models` and the Ollama volume. To download only the AnimateDiff adapter separately, run `docker compose run --rm --no-deps model-setup python model_setup.py --download-animation`. This runs the existing model-setup image without starting its dependencies and stores the adapter under `models`:
 
 ```powershell
 docker compose up --build -d
 ```
 
-The app binds to **http://localhost:8090** on Windows and port 8080 inside Docker. Wait for the application health check, then open **http://localhost:8090**. The first image-generation job can take considerably longer while model weights load. The selected models stay in the `models` folder and Ollama's named Docker volume across app restarts.
+The app binds to **http://localhost:8090** on Windows and port 8080 inside Docker. Wait for the application health check, then open **http://localhost:8090**. The first video-generation job can take considerably longer while image and motion model weights load. The selected models stay in the `models` folder and Ollama's named Docker volume across app restarts.
 
 ### Optional local configuration
 
@@ -122,7 +124,7 @@ The AntHill app container must be running before the client launches this server
 ## Output and limitations
 
 - MP4 video: 1080 × 1920, H.264, 30 frames per second, AAC audio, `yuv420p`, and fast-start metadata.
-- Six illustrated story scenes use gentle zoom effects. This is not true AI video animation.
+- The implemented animation phase uses DreamShaper scene stills with the AnimateDiff motion adapter to generate a short clip per scene (16 frames at 8 fps by default). Each clip is about two seconds at the default 16 frames and 8 fps, then looped as needed during assembly into the narrated 30–60-second video. This produces generated scene motion, but not continuous full-body animation across the whole video, and it does not guarantee consistent character identity. A short 16-frame 384 × 672 GPU smoke clip was verified on an RTX 5050 with 8 GB VRAM; complete 30–60-second real-story video generation remains unverified.
 - Scene subtitles are burned into the video; a matching SRT subtitle file is retained with the job's working files.
 - Narration is generated scene by scene and fitted to the scene timing. Background music is synthesized locally; it is not a licensed song or a music-generation model.
 - Image consistency is best-effort. Inspect the exported video before publishing.
@@ -132,7 +134,7 @@ The AntHill app container must be running before the client launches this server
 
 **Docker says no compatible GPU/device driver is available.** Confirm Docker Desktop is running with its WSL2 engine, update the Windows NVIDIA driver, and rerun the `nvidia/cuda` smoke command above. Restart Docker Desktop after a driver update.
 
-**Model setup fails.** Check `docker compose logs ollama ollama-model-setup model-setup`, confirm internet access for the initial downloads, then rerun `docker compose up --build -d`. Ollama stores its model in the persistent `ollama_models` volume; DreamShaper and Kokoro files are stored in `models`.
+**Model setup fails.** Check `docker compose logs ollama ollama-model-setup model-setup`, confirm internet access for the initial downloads, then rerun `docker compose up --build -d`. Ollama stores its model in the persistent `ollama_models` volume; DreamShaper, Kokoro, and AnimateDiff files are stored in `models`.
 
 **The app says an approved model is missing.** Check `docker compose logs model-setup anthill`, then rerun `docker compose up --build -d` and retry the job. The app uses offline Hugging Face access after model setup; it will not silently download models during inference.
 
@@ -149,6 +151,8 @@ The AntHill app container must be running before the client launches this server
 - [Llama 3.2](https://ollama.com/library/llama3.2) is governed by Meta's Llama 3.2 Community License and acceptable-use terms; review them for your intended use.
 - Ollama, Docker, PyTorch, Diffusers, Piper's retained package dependency, and the other project dependencies have their own licenses. Review the applicable notices before redistribution.
 
-## True AI animation research
+## Animation status and limitations
 
-True character motion is a separate follow-up. [CogVideoX-2B](https://huggingface.co/zai-org/CogVideoX-2b) is a candidate to benchmark first: its official repository is about 13.8 GB, and the model card reports Diffusers FP16 inference starting at 4 GB VRAM, with model offload and VAE slicing/tiling optimizations. The vendor says those memory figures were tested on A100/H100 GPUs, so performance and compatibility on this RTX 5050 remain unverified. CogVideoX-2B targets short 720 × 480, 8 fps clips, so it would provide scene inserts rather than replace the full 1080 × 1920 narration pipeline. Its model license is Apache-2.0. [Wan 2.1 T2V 1.3B](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B) is another option, but its published 8.19 GB VRAM requirement for a five-second 480p clip leaves no practical headroom on this 8 GB laptop. Neither model is installed or part of the current pipeline.
+AnimateDiff is implemented as a generation phase that turns each DreamShaper scene image into a short motion clip, then assembles those clips with narration, subtitles, and music into a 1080 × 1920 MP4. The clips repeat to fill their scene durations. This is real generated scene motion, but it does not provide continuous full-body animation through the entire video or guarantee exact character identity across scenes. A short 16-frame 384 × 672 GPU smoke clip was verified on an RTX 5050 with 8 GB VRAM. Complete 30–60-second real-story output is not yet verified.
+
+The adapter is distributed under its upstream model license; review the [model card](https://huggingface.co/guoyww/animatediff-motion-adapter-v1-5-2) before redistribution or commercial use. The app uses locally stored weights for inference and does not download models at runtime.

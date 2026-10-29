@@ -19,6 +19,8 @@ DATA_ROOT = Path(os.getenv("ANTHILL_DATA", "/data"))
 MODELS_ROOT = DATA_ROOT / "models"
 IMAGE_REPO = "Lykon/dreamshaper-8"
 IMAGE_REVISION = "a7e52b98680b1ba8ff7bce97c7f9f2e2e5337917"
+ANIMATION_REPO = "guoyww/animatediff-motion-adapter-v1-5-2"
+ANIMATION_REVISION = "504374388860e52e206813f44f1ab60a3814152a"
 
 
 def _configured_model_path(variable: str, default_path: Path) -> Path:
@@ -31,6 +33,10 @@ def _configured_model_path(variable: str, default_path: Path) -> Path:
 
 IMAGE_PATH = _configured_model_path(
     "IMAGE_MODEL_PATH", MODELS_ROOT / "huggingface" / "Lykon--dreamshaper-8"
+)
+ANIMATION_PATH = _configured_model_path(
+    "ANIMATEDIFF_MODEL_PATH",
+    MODELS_ROOT / "animatediff" / "guoyww--animatediff-motion-adapter-v1-5-2",
 )
 VOICE_REPO = "hexgrad/Kokoro-82M"
 VOICE_REVISION = "f3ff3571791e39611d31c381e3a41a3af07b4987"
@@ -78,6 +84,7 @@ VOICE_FILES = (
     str(KOKORO_MODEL_FILE.relative_to(VOICE_PATH)),
     _voice_manifest_path,
 )
+ANIMATION_FILES = ("config.json", "diffusion_pytorch_model.fp16.safetensors")
 
 
 def _snapshot(repo_id: str, revision: str, destination: Path, files: tuple[str, ...]) -> None:
@@ -100,6 +107,7 @@ def _snapshot(repo_id: str, revision: str, destination: Path, files: tuple[str, 
 def _model_manifest() -> dict:
     image_ready = all((IMAGE_PATH / name).is_file() for name in IMAGE_FILES)
     voice_ready = all((VOICE_PATH / name).is_file() for name in VOICE_FILES)
+    animation_ready = all((ANIMATION_PATH / name).is_file() for name in ANIMATION_FILES)
     return {
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         "models": {
@@ -118,6 +126,14 @@ def _model_manifest() -> dict:
                 "local_path": str(VOICE_PATH),
                 "ready": voice_ready,
                 "files": list(VOICE_FILES),
+            },
+            "animation": {
+                "repository": ANIMATION_REPO,
+                "revision": ANIMATION_REVISION,
+                "variant": "fp16",
+                "local_path": str(ANIMATION_PATH),
+                "ready": animation_ready,
+                "files": list(ANIMATION_FILES),
             },
             "storyboard": {
                 "provider": "local Ollama",
@@ -144,17 +160,18 @@ def main() -> int:
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--download-image", action="store_true", help="Download DreamShaper 8 FP16 for local image generation")
     selection.add_argument("--download-voice", action="store_true", help="Download Kokoro 82M and the af_heart voice")
-    selection.add_argument("--all-approved", action="store_true", help="Download both approved DreamShaper and Kokoro files")
+    selection.add_argument("--download-animation", action="store_true", help="Download the approved AnimateDiff FP16 motion adapter")
+    selection.add_argument("--all-approved", action="store_true", help="Download all approved DreamShaper, Kokoro, and AnimateDiff files")
     parser.add_argument("--verify-only", action="store_true", help="Write readiness data without downloading model files")
     parser.add_argument("--model", choices=("dreamshaper-8",), help="Allow-listed image model name used with --download-image")
     args = parser.parse_args()
 
-    if args.verify_only and (args.download_image or args.download_voice or args.all_approved):
+    if args.verify_only and (args.download_image or args.download_voice or args.download_animation or args.all_approved):
         parser.error("--verify-only cannot be combined with download options")
     if args.model and not args.download_image:
         parser.error("--model may only be used with --download-image")
-    if not args.verify_only and not (args.download_image or args.download_voice or args.all_approved):
-        parser.error("Select --download-image, --download-voice, --all-approved, or --verify-only")
+    if not args.verify_only and not (args.download_image or args.download_voice or args.download_animation or args.all_approved):
+        parser.error("Select --download-image, --download-voice, --download-animation, --all-approved, or --verify-only")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
@@ -178,6 +195,8 @@ def main() -> int:
                 temporary_weight = KOKORO_MODEL_FILE.with_suffix(KOKORO_MODEL_FILE.suffix + ".partial")
                 shutil.copyfile(default_weight, temporary_weight)
                 temporary_weight.replace(KOKORO_MODEL_FILE)
+        if args.download_animation or args.all_approved:
+            _snapshot(ANIMATION_REPO, ANIMATION_REVISION, ANIMATION_PATH, ANIMATION_FILES)
         manifest = _write_manifest()
     except Exception as exc:
         logger.exception("Approved model setup failed")
@@ -188,7 +207,7 @@ def main() -> int:
     if args.verify_only and not all(
         model["ready"] is True
         for name, model in manifest["models"].items()
-        if name in ("image", "narration")
+        if name in ("image", "narration", "animation")
     ):
         return 2
     return 0

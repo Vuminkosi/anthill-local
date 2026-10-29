@@ -16,7 +16,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from model_setup import IMAGE_FILES, IMAGE_PATH, VOICE_FILES, VOICE_PATH
+from model_setup import ANIMATION_FILES, ANIMATION_PATH, IMAGE_FILES, IMAGE_PATH, VOICE_FILES, VOICE_PATH
 from pipeline import GenerationCancelled, ROOT, local_ollama_base, run_job
 
 app = Flask(__name__)
@@ -124,7 +124,7 @@ def _public_job(row: sqlite3.Row) -> dict:
 
 
 def _local_model_status() -> tuple[bool, dict]:
-    """Inspect selected model files and the configured local Ollama service only."""
+    """Inspect selected local model files and the configured local Ollama service only."""
     image_model = os.getenv("IMAGE_MODEL", "Lykon/dreamshaper-8")
     image_path = IMAGE_PATH
     image_ready = (
@@ -133,6 +133,8 @@ def _local_model_status() -> tuple[bool, dict]:
     )
     voice_name = os.getenv("KOKORO_VOICE", "af_heart")
     voice_ready = all((VOICE_PATH / filename).is_file() for filename in VOICE_FILES)
+    motion_name = "AnimateDiff 1.5.2 motion adapter"
+    animation_ready = all((ANIMATION_PATH / filename).is_file() for filename in ANIMATION_FILES)
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     storyboard_ready = False
     try:
@@ -151,10 +153,11 @@ def _local_model_status() -> tuple[bool, dict]:
             )
     except (OSError, RuntimeError, ValueError, urllib.error.URLError):
         logger.info("Local Ollama model readiness check is unavailable")
-    return image_ready and voice_ready and storyboard_ready, {
+    return image_ready and voice_ready and storyboard_ready and animation_ready, {
         "image": {"name": image_model, "installed": image_ready},
         "narration": {"name": f"Kokoro 82M ({voice_name})", "installed": voice_ready},
         "storyboard": {"name": ollama_model, "installed": storyboard_ready},
+        "animation": {"name": motion_name, "installed": animation_ready},
     }
 
 
@@ -186,7 +189,7 @@ def _update_progress(job_id: str, message: str, percent: int | None = None, phas
     safe_message = str(message).strip()[:240] or "Working"
     bounded_percent = max(0, min(99, int(percent))) if percent is not None else None
     with _connect() as connection:
-        safe_phase = phase if phase in {"queued", "storyboard", "narration", "scenes", "assembly", "complete", "cancelling", "cancelled", "error"} else None
+        safe_phase = phase if phase in {"queued", "storyboard", "narration", "scenes", "animation", "assembly", "complete", "cancelling", "cancelled", "error"} else None
         if bounded_percent is None and safe_phase is None:
             connection.execute(
                 "UPDATE jobs SET progress=?, updated_at=? WHERE id=? AND status='working'",

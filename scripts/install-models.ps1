@@ -16,6 +16,7 @@ try {
             'IMAGE_MODEL=Lykon/dreamshaper-8'
             'IMAGE_MODEL_VARIANT=fp16'
             'IMAGE_MODEL_PATH=/data/models/huggingface/Lykon--dreamshaper-8'
+            'ANIMATEDIFF_MODEL_PATH=/data/models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2'
             'KOKORO_MODEL_PATH=/data/models/voices/kokoro/kokoro-v1_0.pth'
             'KOKORO_VOICE_PATH=/data/models/voices/kokoro/voices/af_heart.pt'
             'HF_TOKEN='
@@ -34,7 +35,7 @@ try {
         throw "docker compose up failed with exit code $LASTEXITCODE."
     }
 
-    Write-Host 'Downloading the approved DreamShaper 8 FP16 image model and Kokoro narration model.'
+    Write-Host 'Downloading the approved DreamShaper 8 FP16 image model, Kokoro narration model, and AnimateDiff FP16 motion adapter.'
     docker compose --profile model-setup run --rm model-setup
     if ($LASTEXITCODE -ne 0) {
         throw "Local model setup failed with exit code $LASTEXITCODE. Review the output above and retry after resolving the download error."

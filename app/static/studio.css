@@ -271,7 +271,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, textarea:focus-visi
 .progress-track { height: 7px; overflow: hidden; margin: 15px 0 18px; border-radius: 99px; background: var(--subtle); }
 .progress-track[hidden] { display: none; }
 .progress-track span { width: 0; height: 100%; display: block; border-radius: inherit; background: var(--action); transition: width 200ms ease; }
-.generation-phases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 0; margin: 0 0 12px; list-style: none; }
+.generation-phases { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 0; margin: 0 0 12px; list-style: none; }
 .generation-phases li { min-width: 0; display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 11px; line-height: 1.35; }
 .generation-phases li::before { content: ""; width: 7px; height: 7px; flex: 0 0 7px; margin-top: 3px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface); }
 .generation-phases li.is-current { color: var(--action-text); font-weight: 650; }

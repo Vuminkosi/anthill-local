@@ -92,12 +92,183 @@ class LocalInferenceContractTests(unittest.TestCase):
                 pipeline, "storyboard", return_value=plan
             ) as storyboard, patch.object(pipeline, "narrate"), patch.object(
                 pipeline, "make_images", return_value=[]
-            ), patch.object(pipeline, "render"):
+            ), patch.object(pipeline, "make_motion_clips", return_value=[]), patch.object(pipeline, "render"):
                 result = pipeline.run_job("legacy-signature", story, progress_messages.append)
 
         self.assertEqual(result, output / "AntHill_legacy-signature.mp4")
         self.assertEqual(storyboard.call_args.args, (story, 30, None, "heartfelt", "", ""))
         self.assertTrue(progress_messages)
+
+    def test_run_job_generates_motion_after_stills_and_passes_clips_to_render(self) -> None:
+        story = "A traveler finds a lost dog and returns it before the storm."
+        plan = {
+            "character_bible": "A traveler and a small dog",
+            "narration": "The traveler returns the dog before the storm.",
+            "scenes": [{"image": "A traveler", "caption": "A kind discovery", "narration": "spoken words " * 6}],
+        }
+        with tempfile.TemporaryDirectory(prefix="anthill-motion-order-") as temporary:
+            root = Path(temporary)
+            images = [root / "still.png"]
+            clips = [root / "motion.mp4"]
+            order = []
+
+            def make_stills(*_args):
+                order.append("stills")
+                return images
+
+            def make_motion(*args):
+                order.append("motion")
+                self.assertEqual(args[1], images)
+                return clips
+
+            def render(*_args, **kwargs):
+                order.append("render")
+                self.assertEqual(kwargs["motion_clips"], clips)
+
+            with patch.object(pipeline, "OUT", root / "output"), patch.object(
+                pipeline, "storyboard", return_value=plan
+            ), patch.object(pipeline, "narrate"), patch.object(
+                pipeline, "make_images", side_effect=make_stills
+            ), patch.object(pipeline, "make_motion_clips", side_effect=make_motion), patch.object(
+                pipeline, "render", side_effect=render
+            ):
+                pipeline.run_job("motion-order", story, lambda *_args: None)
+
+        self.assertEqual(order, ["stills", "motion", "render"])
+
+    def test_run_job_honors_cancellation_raised_during_motion_generation(self) -> None:
+        story = "A traveler finds a lost dog and returns it before the storm."
+        plan = {
+            "character_bible": "A traveler and a small dog",
+            "narration": "The traveler returns the dog before the storm.",
+            "scenes": [{"image": "A traveler", "caption": "A kind discovery", "narration": "spoken words " * 6}],
+        }
+        with tempfile.TemporaryDirectory(prefix="anthill-motion-cancel-") as temporary:
+            output = Path(temporary) / "output"
+            cancellation_checks = []
+
+            def should_cancel():
+                cancellation_checks.append(True)
+                return len(cancellation_checks) >= 5
+
+            def cancel_during_animation(*args):
+                self.assertTrue(callable(args[-1]))
+                if args[-1]():
+                    raise pipeline.GenerationCancelled("cancelled in animation")
+
+            with patch.object(pipeline, "OUT", output), patch.object(
+                pipeline, "storyboard", return_value=plan
+            ), patch.object(pipeline, "narrate"), patch.object(
+                pipeline, "make_images", return_value=[Path("still.png")]
+            ), patch.object(
+                pipeline, "make_motion_clips", side_effect=cancel_during_animation
+            ) as animation, patch.object(pipeline, "render") as render:
+                with self.assertRaises(pipeline.GenerationCancelled):
+                    pipeline.run_job("motion-cancel", story, lambda *_args: None, cancelled=should_cancel)
+
+        animation.assert_called_once()
+        render.assert_not_called()
+        self.assertGreaterEqual(len(cancellation_checks), 5)
+
+    def test_missing_local_motion_adapter_fails_without_loading_remote_models(self) -> None:
+        import types
+
+        with tempfile.TemporaryDirectory(prefix="anthill-no-motion-adapter-") as temporary:
+            adapter = Path(temporary) / "adapter"
+            fake_torch = types.ModuleType("torch")
+            fake_diffusers = types.ModuleType("diffusers")
+            fake_adapter_loader = unittest.mock.Mock()
+            fake_pipeline_loader = unittest.mock.Mock()
+            fake_diffusers.MotionAdapter = unittest.mock.Mock(from_pretrained=fake_adapter_loader)
+            fake_diffusers.AnimateDiffVideoToVideoPipeline = unittest.mock.Mock(
+                from_pretrained=fake_pipeline_loader
+            )
+            with patch.dict(sys.modules, {"torch": fake_torch, "diffusers": fake_diffusers}), patch.object(
+                pipeline, "_motion_model_path", return_value=adapter
+            ):
+                with self.assertRaisesRegex(RuntimeError, "inside the app container.*never downloads"):
+                    pipeline.make_motion_clips([{"image": "scene"}], [Path("still.png")], "character",
+                                               Path(temporary), lambda *_args: None)
+
+        fake_adapter_loader.assert_not_called()
+        fake_pipeline_loader.assert_not_called()
+
+    def test_motion_pipeline_step_callback_returns_kwargs_and_propagates_cancellation(self) -> None:
+        import types
+
+        with tempfile.TemporaryDirectory(prefix="anthill-motion-callback-") as temporary:
+            root = Path(temporary)
+            adapter_path = root / "adapter"
+            base_path = root / "dreamshaper"
+            for relative in pipeline.ANIMATION_FILES:
+                target = adapter_path / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"adapter")
+            base_weight = base_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
+            base_weight.parent.mkdir(parents=True)
+            base_weight.write_bytes(b"base")
+            still_path = root / "still.png"
+            pipeline.Image.new("RGB", (32, 32), "blue").save(still_path)
+
+            callback_results = []
+            class FakeMotionPipe:
+                def enable_model_cpu_offload(self):
+                    pass
+
+                def __call__(self, video, prompt, negative_prompt, height, width,
+                             num_inference_steps, guidance_scale, strength, generator,
+                             callback_on_step_end=None):
+                    kwargs = {"latents": object()}
+                    returned = callback_on_step_end(self, 0, 1, kwargs)
+                    callback_results.append((kwargs, returned))
+                    frame = pipeline.Image.new("RGB", (width, height), "green")
+                    return types.SimpleNamespace(frames=[[frame]])
+
+            fake_pipe = FakeMotionPipe()
+            fake_torch = types.ModuleType("torch")
+            fake_torch.float16 = "float16"
+            fake_torch.Generator = lambda **_kwargs: types.SimpleNamespace(
+                manual_seed=lambda _seed: object()
+            )
+            fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+            fake_diffusers = types.ModuleType("diffusers")
+            fake_diffusers.MotionAdapter = types.SimpleNamespace(
+                from_pretrained=unittest.mock.Mock(return_value=object())
+            )
+            fake_diffusers.AnimateDiffVideoToVideoPipeline = types.SimpleNamespace(
+                from_pretrained=unittest.mock.Mock(return_value=fake_pipe)
+            )
+
+            cancellation_checks = []
+
+            def cancel_during_step():
+                cancellation_checks.append(True)
+                return len(cancellation_checks) >= 3
+
+            with patch.dict(sys.modules, {"torch": fake_torch, "diffusers": fake_diffusers}), patch.dict(
+                os.environ,
+                {"ANIMATEDIFF_WIDTH": "256", "ANIMATEDIFF_HEIGHT": "448",
+                 "ANIMATEDIFF_FRAMES": "8", "ANIMATEDIFF_STEPS": "4"},
+            ), patch.object(pipeline, "_motion_model_path", return_value=adapter_path), patch.object(
+                pipeline, "_local_model_path", return_value=base_path
+            ), patch.object(pipeline, "command") as command:
+                clips = pipeline.make_motion_clips(
+                    [{"image": "scene"}], [still_path], "character", root / "success",
+                    lambda *_args: None, cancelled=lambda: False,
+                )
+                self.assertEqual(len(clips), 1)
+                self.assertIs(callback_results[0][0], callback_results[0][1])
+                self.assertEqual(callback_results[0][1].keys(), {"latents"})
+
+                callback_results.clear()
+                cancellation_checks.clear()
+                with self.assertRaises(pipeline.GenerationCancelled):
+                    pipeline.make_motion_clips(
+                        [{"image": "scene"}], [still_path], "character", root / "cancelled",
+                        lambda *_args: None, cancelled=cancel_during_step,
+                    )
+
+            command.assert_called_once()
 
     def test_run_job_checks_cancellation_before_storyboard_or_model_work(self) -> None:
         with tempfile.TemporaryDirectory(prefix="anthill-cancel-test-") as temporary:
@@ -181,6 +352,11 @@ class LocalInferenceContractTests(unittest.TestCase):
                     target = image_path / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(b"image")
+                animation_path = root / "animatediff"
+                for relative in model_setup.ANIMATION_FILES:
+                    target = animation_path / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b"animation")
 
                 manifest = model_setup._model_manifest()["models"]
                 self.assertTrue(manifest["narration"]["ready"])
@@ -195,12 +371,70 @@ class LocalInferenceContractTests(unittest.TestCase):
                     server, "IMAGE_FILES", model_setup.IMAGE_FILES
                 ), patch.object(server, "VOICE_PATH", model_setup.VOICE_PATH), patch.object(
                     server, "VOICE_FILES", model_setup.VOICE_FILES
+                ), patch.object(server, "ANIMATION_PATH", animation_path), patch.object(
+                    server, "ANIMATION_FILES", model_setup.ANIMATION_FILES
                 ), patch.object(server.urllib.request, "build_opener", return_value=opener):
                     ready, status = server._local_model_status()
                 self.assertTrue(ready)
                 self.assertTrue(status["narration"]["installed"])
                 self.assertTrue(status["image"]["installed"])
+                self.assertTrue(status["animation"]["installed"])
             importlib.reload(model_setup)
+
+    def test_animatediff_manifest_is_pinned_and_ready_only_with_both_exact_files(self) -> None:
+        expected_files = (
+            "config.json",
+            "diffusion_pytorch_model.fp16.safetensors",
+        )
+        with tempfile.TemporaryDirectory(prefix="anthill-animatediff-manifest-") as temporary:
+            animation_path = Path(temporary) / "adapter"
+            with patch.object(model_setup, "ANIMATION_PATH", animation_path), patch.object(
+                model_setup, "ANIMATION_FILES", expected_files
+            ):
+                model = model_setup._model_manifest()["models"]["animation"]
+                self.assertEqual(model["repository"], "guoyww/animatediff-motion-adapter-v1-5-2")
+                self.assertEqual(model["revision"], "504374388860e52e206813f44f1ab60a3814152a")
+                self.assertEqual(model["files"], list(expected_files))
+                self.assertEqual(model_setup.ANIMATION_FILES, expected_files)
+                self.assertEqual(pipeline.ANIMATION_FILES, expected_files)
+                self.assertEqual(Path(model["local_path"]), animation_path)
+                self.assertFalse(model["ready"])
+
+                (animation_path / expected_files[0]).parent.mkdir(parents=True, exist_ok=True)
+                (animation_path / expected_files[0]).write_bytes(b"config")
+                self.assertFalse(model_setup._model_manifest()["models"]["animation"]["ready"])
+
+                (animation_path / expected_files[1]).write_bytes(b"weights")
+                self.assertTrue(model_setup._model_manifest()["models"]["animation"]["ready"])
+
+    def test_animatediff_verify_only_does_not_download_files(self) -> None:
+        with patch.object(model_setup, "_snapshot") as snapshot, patch.object(
+            model_setup,
+            "_write_manifest",
+            return_value={
+                "models": {
+                    name: {"ready": True}
+                    for name in ("image", "narration", "animation")
+                }
+            },
+        ) as write_manifest, patch("sys.argv", ["model_setup", "--verify-only"]):
+            self.assertEqual(model_setup.main(), 0)
+
+        snapshot.assert_not_called()
+        write_manifest.assert_called_once_with()
+
+    def test_animatediff_download_command_uses_only_the_pinned_file_allow_list(self) -> None:
+        with patch.object(model_setup, "_snapshot") as snapshot, patch.object(
+            model_setup, "_write_manifest", return_value={"models": {}}
+        ), patch("sys.argv", ["model_setup", "--download-animation"]):
+            self.assertEqual(model_setup.main(), 0)
+
+        snapshot.assert_called_once_with(
+            "guoyww/animatediff-motion-adapter-v1-5-2",
+            "504374388860e52e206813f44f1ab60a3814152a",
+            model_setup.ANIMATION_PATH,
+            ("config.json", "diffusion_pytorch_model.fp16.safetensors"),
+        )
 
 
 if __name__ == "__main__":

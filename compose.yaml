@@ -54,6 +54,7 @@ services:
       IMAGE_MODEL: ${IMAGE_MODEL:-Lykon/dreamshaper-8}
       IMAGE_MODEL_VARIANT: ${IMAGE_MODEL_VARIANT:-fp16}
       IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
+      ANIMATEDIFF_MODEL_PATH: ${ANIMATEDIFF_MODEL_PATH:-/data/models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2}
       KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
       KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
     volumes:
@@ -83,6 +84,7 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
+      ANIMATEDIFF_MODEL_PATH: ${ANIMATEDIFF_MODEL_PATH:-/data/models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2}
       KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
       KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
     volumes:
