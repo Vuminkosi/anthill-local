@@ -40,7 +40,7 @@ CATEGORIES = {
         },
     },
     "geography": {
-        "label": "Geography", 
+        "label": "Geography",
         "subcategories": {
             "countries": {"label": "Countries and places", "query": "countries geography"},
             "landmarks": {"label": "Landmarks", "query": "world landmarks"},
