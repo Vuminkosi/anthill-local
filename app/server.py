@@ -16,7 +16,11 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from model_setup import ANIMATION_FILES, ANIMATION_PATH, IMAGE_FILES, IMAGE_PATH, VOICE_FILES, VOICE_PATH
+from model_setup import (
+    VOICE_FILES,
+    VOICE_PATH,
+    ltx_video_assets_ready,
+)
 from pipeline import GenerationCancelled, ROOT, local_ollama_base, run_job
 
 app = Flask(__name__)
@@ -125,16 +129,9 @@ def _public_job(row: sqlite3.Row) -> dict:
 
 def _local_model_status() -> tuple[bool, dict]:
     """Inspect selected local model files and the configured local Ollama service only."""
-    image_model = os.getenv("IMAGE_MODEL", "Lykon/dreamshaper-8")
-    image_path = IMAGE_PATH
-    image_ready = (
-        image_model == "Lykon/dreamshaper-8"
-        and all((image_path / filename).is_file() for filename in IMAGE_FILES)
-    )
     voice_name = os.getenv("KOKORO_VOICE", "af_heart")
     voice_ready = all((VOICE_PATH / filename).is_file() for filename in VOICE_FILES)
-    motion_name = "AnimateDiff 1.5.2 motion adapter"
-    animation_ready = all((ANIMATION_PATH / filename).is_file() for filename in ANIMATION_FILES)
+    video_ready = ltx_video_assets_ready()
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     storyboard_ready = False
     try:
@@ -153,11 +150,15 @@ def _local_model_status() -> tuple[bool, dict]:
             )
     except (OSError, RuntimeError, ValueError, urllib.error.URLError):
         logger.info("Local Ollama model readiness check is unavailable")
-    return image_ready and voice_ready and storyboard_ready and animation_ready, {
-        "image": {"name": image_model, "installed": image_ready},
+    ready = voice_ready and storyboard_ready and video_ready
+    return ready, {
         "narration": {"name": f"Kokoro 82M ({voice_name})", "installed": voice_ready},
         "storyboard": {"name": ollama_model, "installed": storyboard_ready},
-        "animation": {"name": motion_name, "installed": animation_ready},
+        "video": {
+            "name": "LTX-Video 2B Distilled",
+            "installed": video_ready,
+            "active": True,
+        },
     }
 
 

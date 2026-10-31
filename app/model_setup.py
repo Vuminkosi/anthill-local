@@ -17,10 +17,50 @@ from pathlib import Path
 
 DATA_ROOT = Path(os.getenv("ANTHILL_DATA", "/data"))
 MODELS_ROOT = DATA_ROOT / "models"
-IMAGE_REPO = "Lykon/dreamshaper-8"
-IMAGE_REVISION = "a7e52b98680b1ba8ff7bce97c7f9f2e2e5337917"
-ANIMATION_REPO = "guoyww/animatediff-motion-adapter-v1-5-2"
-ANIMATION_REVISION = "504374388860e52e206813f44f1ab60a3814152a"
+LTX_VIDEO_REPO = "Lightricks/LTX-Video"
+LTX_VIDEO_REVISION = "19560f8b59a58a0431baf39c78cd8a60a86b9c33"
+LTX_TEXT_ENCODER_REPO = "PixArt-alpha/PixArt-XL-2-1024-MS"
+LTX_TEXT_ENCODER_REVISION = "dcc28e445c2cc7310d53d438e50a0edd7bec3407"
+LTX_CONFIG_REPO = "Lightricks/ltx-video-distilled"
+LTX_CONFIG_REVISION = "9c24b4737c3c177bba269fc57039a02247f7f2fe"
+LTX_PATH = MODELS_ROOT / "ltx-video"
+LTX_CHECKPOINT_PATH = LTX_PATH / "checkpoint"
+LTX_TEXT_ENCODER_PATH = LTX_PATH / "text-encoder"
+LTX_CONFIG_PATH = LTX_PATH / "config"
+LTX_CHECKPOINT_FILES = (
+    "ltxv-2b-0.9.8-distilled.safetensors",
+    "ltxv-spatial-upscaler-0.9.8.safetensors",
+    "LTX-Video-Open-Weights-License-0.X.txt",
+)
+LTX_TEXT_ENCODER_FILES = (
+    "text_encoder/config.json",
+    "text_encoder/model-*.safetensors",
+    "text_encoder/model.safetensors.index.json",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/spiece.model",
+    "tokenizer/tokenizer.json",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/added_tokens.json",
+)
+LTX_CONFIG_FILE = "configs/ltxv-2b-0.9.8-distilled.yaml"
+
+def ltx_video_assets_ready() -> bool:
+    return (
+        all((LTX_CHECKPOINT_PATH / name).is_file() for name in LTX_CHECKPOINT_FILES)
+        and (LTX_TEXT_ENCODER_PATH / "text_encoder/config.json").is_file()
+        and len(list((LTX_TEXT_ENCODER_PATH / "text_encoder").glob("model-*.safetensors"))) >= 2
+        and all(
+            (LTX_TEXT_ENCODER_PATH / name).is_file()
+            for name in (
+                "text_encoder/model.safetensors.index.json",
+                "tokenizer/spiece.model",
+                "tokenizer/tokenizer_config.json",
+                "tokenizer/special_tokens_map.json",
+                "tokenizer/added_tokens.json",
+            )
+        )
+        and (LTX_CONFIG_PATH / LTX_CONFIG_FILE).is_file()
+    )
 
 
 def _configured_model_path(variable: str, default_path: Path) -> Path:
@@ -31,13 +71,6 @@ def _configured_model_path(variable: str, default_path: Path) -> Path:
     return configured if configured.is_absolute() else MODELS_ROOT / configured
 
 
-IMAGE_PATH = _configured_model_path(
-    "IMAGE_MODEL_PATH", MODELS_ROOT / "huggingface" / "Lykon--dreamshaper-8"
-)
-ANIMATION_PATH = _configured_model_path(
-    "ANIMATEDIFF_MODEL_PATH",
-    MODELS_ROOT / "animatediff" / "guoyww--animatediff-motion-adapter-v1-5-2",
-)
 VOICE_REPO = "hexgrad/Kokoro-82M"
 VOICE_REVISION = "f3ff3571791e39611d31c381e3a41a3af07b4987"
 VOICE_NAME = os.getenv("KOKORO_VOICE", "af_heart")
@@ -59,21 +92,6 @@ except ValueError:
     VOICE_PATH = KOKORO_MODEL_DIR
 logger = logging.getLogger("anthill.model_setup")
 
-IMAGE_FILES = (
-    "model_index.json",
-    "feature_extractor/preprocessor_config.json",
-    "scheduler/scheduler_config.json",
-    "text_encoder/config.json",
-    "text_encoder/model.fp16.safetensors",
-    "tokenizer/merges.txt",
-    "tokenizer/special_tokens_map.json",
-    "tokenizer/tokenizer_config.json",
-    "tokenizer/vocab.json",
-    "unet/config.json",
-    "unet/diffusion_pytorch_model.fp16.safetensors",
-    "vae/config.json",
-    "vae/diffusion_pytorch_model.fp16.safetensors",
-)
 VOICE_DOWNLOAD_FILES = ("config.json", "kokoro-v1_0.pth", f"voices/{VOICE_NAME}.pt")
 try:
     _voice_manifest_path = str(KOKORO_VOICE_FILE.relative_to(VOICE_PATH))
@@ -84,41 +102,41 @@ VOICE_FILES = (
     str(KOKORO_MODEL_FILE.relative_to(VOICE_PATH)),
     _voice_manifest_path,
 )
-ANIMATION_FILES = ("config.json", "diffusion_pytorch_model.fp16.safetensors")
-
-
-def _snapshot(repo_id: str, revision: str, destination: Path, files: tuple[str, ...]) -> None:
+def _snapshot(
+    repo_id: str,
+    revision: str,
+    destination: Path,
+    files: tuple[str, ...],
+    *,
+    repo_type: str = "model",
+) -> None:
     from huggingface_hub import snapshot_download
 
     destination.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading approved model %s at revision %s", repo_id, revision)
     snapshot_download(
         repo_id=repo_id,
+        repo_type=repo_type,
         revision=revision,
         local_dir=str(destination),
         allow_patterns=list(files),
         max_workers=2,
     )
-    missing = [name for name in files if not (destination / name).is_file()]
+    missing = []
+    for name in files:
+        candidates = list(destination.glob(name)) if any(character in name for character in "*?[") else [destination / name]
+        if not any(candidate.is_file() for candidate in candidates):
+            missing.append(name)
     if missing:
         raise RuntimeError(f"Model download is incomplete; missing files: {', '.join(missing)}")
 
 
 def _model_manifest() -> dict:
-    image_ready = all((IMAGE_PATH / name).is_file() for name in IMAGE_FILES)
     voice_ready = all((VOICE_PATH / name).is_file() for name in VOICE_FILES)
-    animation_ready = all((ANIMATION_PATH / name).is_file() for name in ANIMATION_FILES)
+    ltx_video_ready = ltx_video_assets_ready()
     return {
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         "models": {
-            "image": {
-                "repository": IMAGE_REPO,
-                "revision": IMAGE_REVISION,
-                "variant": "fp16",
-                "local_path": str(IMAGE_PATH),
-                "ready": image_ready,
-                "files": list(IMAGE_FILES),
-            },
             "narration": {
                 "repository": VOICE_REPO,
                 "revision": VOICE_REVISION,
@@ -127,13 +145,16 @@ def _model_manifest() -> dict:
                 "ready": voice_ready,
                 "files": list(VOICE_FILES),
             },
-            "animation": {
-                "repository": ANIMATION_REPO,
-                "revision": ANIMATION_REVISION,
-                "variant": "fp16",
-                "local_path": str(ANIMATION_PATH),
-                "ready": animation_ready,
-                "files": list(ANIMATION_FILES),
+            "video": {
+                "repository": LTX_VIDEO_REPO,
+                "revision": LTX_VIDEO_REVISION,
+                "variant": "2B distilled BF16 0.9.8",
+                "local_path": str(LTX_PATH),
+                "ready": ltx_video_ready,
+                "checkpoint_files": list(LTX_CHECKPOINT_FILES),
+                "text_encoder_repository": LTX_TEXT_ENCODER_REPO,
+                "text_encoder_revision": LTX_TEXT_ENCODER_REVISION,
+                "config_file": LTX_CONFIG_FILE,
             },
             "storyboard": {
                 "provider": "local Ollama",
@@ -158,20 +179,16 @@ def _write_manifest() -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download only user-approved AntHill local model files.")
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--download-image", action="store_true", help="Download DreamShaper 8 FP16 for local image generation")
     selection.add_argument("--download-voice", action="store_true", help="Download Kokoro 82M and the af_heart voice")
-    selection.add_argument("--download-animation", action="store_true", help="Download the approved AnimateDiff FP16 motion adapter")
-    selection.add_argument("--all-approved", action="store_true", help="Download all approved DreamShaper, Kokoro, and AnimateDiff files")
+    selection.add_argument("--download-ltx-video", action="store_true", help="Download LTX-Video 2B distilled BF16 weights and text encoder")
+    selection.add_argument("--all-approved", action="store_true", help="Download LTX-Video and Kokoro files")
     parser.add_argument("--verify-only", action="store_true", help="Write readiness data without downloading model files")
-    parser.add_argument("--model", choices=("dreamshaper-8",), help="Allow-listed image model name used with --download-image")
     args = parser.parse_args()
 
-    if args.verify_only and (args.download_image or args.download_voice or args.download_animation or args.all_approved):
+    if args.verify_only and (args.download_voice or args.download_ltx_video or args.all_approved):
         parser.error("--verify-only cannot be combined with download options")
-    if args.model and not args.download_image:
-        parser.error("--model may only be used with --download-image")
-    if not args.verify_only and not (args.download_image or args.download_voice or args.download_animation or args.all_approved):
-        parser.error("Select --download-image, --download-voice, --download-animation, --all-approved, or --verify-only")
+    if not args.verify_only and not (args.download_voice or args.download_ltx_video or args.all_approved):
+        parser.error("Select --download-voice, --download-ltx-video, --all-approved, or --verify-only")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
@@ -180,8 +197,6 @@ def main() -> int:
             # an explicit setup flag, so temporarily permit this one CLI process.
             os.environ["HF_HUB_OFFLINE"] = "0"
             os.environ["HUGGINGFACE_HUB_OFFLINE"] = "0"
-        if args.download_image or args.all_approved:
-            _snapshot(IMAGE_REPO, IMAGE_REVISION, IMAGE_PATH, IMAGE_FILES)
         if args.download_voice or args.all_approved:
             _snapshot(VOICE_REPO, VOICE_REVISION, KOKORO_MODEL_DIR, VOICE_DOWNLOAD_FILES)
             default_voice = KOKORO_MODEL_DIR / f"voices/{VOICE_NAME}.pt"
@@ -195,8 +210,16 @@ def main() -> int:
                 temporary_weight = KOKORO_MODEL_FILE.with_suffix(KOKORO_MODEL_FILE.suffix + ".partial")
                 shutil.copyfile(default_weight, temporary_weight)
                 temporary_weight.replace(KOKORO_MODEL_FILE)
-        if args.download_animation or args.all_approved:
-            _snapshot(ANIMATION_REPO, ANIMATION_REVISION, ANIMATION_PATH, ANIMATION_FILES)
+        if args.download_ltx_video or args.all_approved:
+            _snapshot(LTX_VIDEO_REPO, LTX_VIDEO_REVISION, LTX_CHECKPOINT_PATH, LTX_CHECKPOINT_FILES)
+            _snapshot(LTX_TEXT_ENCODER_REPO, LTX_TEXT_ENCODER_REVISION, LTX_TEXT_ENCODER_PATH, LTX_TEXT_ENCODER_FILES)
+            _snapshot(
+                LTX_CONFIG_REPO,
+                LTX_CONFIG_REVISION,
+                LTX_CONFIG_PATH,
+                (LTX_CONFIG_FILE,),
+                repo_type="space",
+            )
         manifest = _write_manifest()
     except Exception as exc:
         logger.exception("Approved model setup failed")
@@ -207,7 +230,7 @@ def main() -> int:
     if args.verify_only and not all(
         model["ready"] is True
         for name, model in manifest["models"].items()
-        if name in ("image", "narration", "animation")
+            if name in ("video", "narration")
     ):
         return 2
     return 0

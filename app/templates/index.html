@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f7f8fa">
   <title>AntHill Studio — Local video maker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='studio.css') }}">
-  <script src="{{ url_for('static', filename='studio.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='studio.js', v='ltx-connected-2') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#story">Skip to story</a>
@@ -33,7 +33,7 @@
       <section class="intro" aria-labelledby="page-title">
         <p class="eyebrow">STORY TO SCREEN</p>
         <h1 id="page-title">Make a little story<br class="desktop-break"> feel big.</h1>
-        <p class="intro-copy">Turn a story into a narrated motion comic, ready to share. Your story and models stay on this computer.</p>
+        <p class="intro-copy">Turn a story into AI-generated, live-action-style video with narration and subtitles. Your story and models stay on this computer.</p>
       </section>
 
       <section id="model-readiness" class="readiness-panel" aria-labelledby="readiness-title" aria-live="polite" hidden>
@@ -42,7 +42,7 @@
           <h2 id="readiness-title">Checking your local studio…</h2>
           <p id="readiness-description"></p>
           <ul id="model-list" class="model-list" aria-label="Local generation models"></ul>
-          <p id="readiness-setup" class="readiness-setup" hidden>In PowerShell, run <code>.\scripts\install-models.ps1</code> from the project folder, then check again.</p>
+          <p id="readiness-setup" class="readiness-setup" hidden>Follow the local model setup instructions, then check readiness again.</p>
         </div>
         <button id="readiness-refresh" class="readiness-refresh" type="button">Check again</button>
       </section>
@@ -132,7 +132,8 @@
                 <span class="play-mark">▶</span>
               </div>
               <p class="empty-title">Your next story goes here</p>
-              <p class="empty-copy">Illustrated scenes with short generated motion effects, narration and subtitles, assembled as a motion comic.</p>
+              <p class="empty-copy">Continuous AI-generated live-action-style scenes with narration and subtitles, assembled into a portrait video.</p>
+              <p class="empty-copy">The footage is AI-generated reenactment, not documentary or camera footage.</p>
             </div>
 
             <div id="job-output" class="job-output" hidden>
@@ -150,8 +151,8 @@
               <ol id="generation-phases" class="generation-phases" aria-label="Video generation phases">
                 <li data-phase="storyboard">Storyboard</li>
                 <li data-phase="narration">Narration</li>
-                <li data-phase="scenes">Illustrations</li>
-                <li data-phase="animation">Animation</li>
+                <li data-phase="scenes">Scene plan</li>
+                <li data-phase="animation">Generate footage</li>
                 <li data-phase="assembly">Assemble video</li>
               </ol>
               <span id="phase-announcement" class="visually-hidden" aria-live="polite" aria-atomic="true"></span>
@@ -161,6 +162,7 @@
               </div>
               <p id="cancelled-message" class="cancelled-message" role="status" hidden>No video was produced because generation was cancelled.</p>
               <div id="video-result" class="video-result" hidden>
+                <p class="field-help">AI-generated live-action-style reenactment.</p>
                 <video id="video-player" controls playsinline preload="metadata" aria-label="Your finished story video"></video>
                 <a id="download-link" class="download-button" href="#" download>Download video <span aria-hidden="true">↓</span></a>
               </div>

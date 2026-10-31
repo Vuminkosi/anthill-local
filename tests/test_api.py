@@ -42,7 +42,7 @@ class VideoJobsApiTests(unittest.TestCase):
         self.model_readiness = patch.object(
             server,
             "_local_model_status",
-            return_value=(True, {"image": {"installed": True}, "narration": {"installed": True}, "storyboard": {"installed": True}}),
+            return_value=(True, {"video": {"installed": True}, "narration": {"installed": True}, "storyboard": {"installed": True}}),
         )
         self.model_readiness.start()
         self.addCleanup(self.model_readiness.stop)
@@ -346,31 +346,20 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "models-needed")
 
-    def test_readiness_exposes_animation_state_without_starting_model_setup(self) -> None:
+    def test_readiness_exposes_ltx_video_state_without_starting_model_setup(self) -> None:
         models = {
-            "image": {"installed": True},
             "narration": {"installed": True},
             "storyboard": {"installed": True},
-            "animation": {"name": "AnimateDiff 1.5.2", "installed": False},
+            "video": {"name": "LTX-Video 2B Distilled", "installed": False, "active": True},
         }
         with patch.object(server, "_local_model_status", return_value=(False, models)) as status:
             response = self.client.get("/api/readiness")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["models"]["animation"], models["animation"])
+        self.assertEqual(response.get_json()["models"]["video"], models["video"])
         status.assert_called_once_with()
 
-    def test_readiness_rejects_partial_dreamshaper_snapshot(self) -> None:
-        image_path = self.root / "models" / "huggingface" / "dreamshaper"
-        for relative in (
-            "unet/diffusion_pytorch_model.fp16.safetensors",
-            "text_encoder/model.fp16.safetensors",
-            "vae/diffusion_pytorch_model.fp16.safetensors",
-        ):
-            target = image_path / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"fixture")
-
+    def test_readiness_blocks_when_ltx_assets_are_incomplete(self) -> None:
         voice_path = self.root / "models" / "voices" / "kokoro"
         for relative in ("kokoro-v1_0.pth", "config.json", "voices/af_heart.pt"):
             target = voice_path / relative
@@ -384,20 +373,20 @@ class VideoJobsApiTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "IMAGE_MODEL": "Lykon/dreamshaper-8",
                 "OLLAMA_URL": "http://ollama:11434",
                 "OLLAMA_MODEL": "llama3.2:3b",
                 "KOKORO_VOICE": "af_heart",
             },
-        ), patch.object(server, "IMAGE_PATH", image_path), patch.object(server, "VOICE_PATH", voice_path), patch.object(
-            server.urllib.request, "build_opener", return_value=opener
+        ), patch.object(server, "VOICE_PATH", voice_path), patch.object(
+            server, "ltx_video_assets_ready", return_value=False
+        ), patch.object(server.urllib.request, "build_opener", return_value=opener
         ):
             ready, models = server._local_model_status()
 
         self.assertFalse(ready)
-        self.assertFalse(models["image"]["installed"])
         self.assertTrue(models["narration"]["installed"])
         self.assertTrue(models["storyboard"]["installed"])
+        self.assertFalse(models["video"]["installed"])
 
     def test_readiness_ollama_redirect_is_not_followed(self) -> None:
         self.model_readiness.stop()

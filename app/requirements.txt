@@ -5,10 +5,16 @@ numpy==1.26.4
 torch==2.14.1
 kokoro==0.9.4
 misaki[en]==0.9.4
-diffusers==0.38.0
-transformers==4.57.3
+diffusers==0.31.0
+transformers==4.51.3
+sentencepiece==0.2.2
 accelerate==1.6.0
 safetensors==0.8.0
-huggingface_hub==0.36.0
+huggingface_hub==0.30.2
+einops==0.8.1
+timm==1.0.24
+imageio[ffmpeg]==2.37.0
+av==16.1.0
+ltx-video @ git+https://github.com/Lightricks/LTX-Video.git@bdc8f017f0148a0f0bb9e3a5049d2d356423cee0
 spacy==3.8.7
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85

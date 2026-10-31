@@ -126,21 +126,30 @@
 
   function showReadiness(payload) {
     const models = payload && payload.models && typeof payload.models === "object" ? payload.models : {};
-    const modelEntries = Object.entries(models).filter(([, item]) => item && typeof item === "object");
+    const modelEntries = Object.entries(models)
+      .filter(([, item]) => item && typeof item === "object")
+      .sort(([left], [right]) => Number(right === "video") - Number(left === "video"));
     const missing = modelEntries.filter(([, item]) => item.installed !== true);
-    const isReady = payload && payload.status === "ready" && modelEntries.length > 0 && missing.length === 0;
+    const videoModelMissing = missing.some(([key, item]) => /video|ltx/i.test(`${key} ${item.name || ""}`));
+    const inactive = modelEntries.filter(([, item]) => item.active === false);
+    const videoModelInactive = inactive.some(([key, item]) => /video|ltx/i.test(`${key} ${item.name || ""}`));
+    const isReady = payload && payload.status === "ready" && modelEntries.length > 0 && missing.length === 0 && inactive.length === 0;
 
     readinessPanel.hidden = false;
     readinessPanel.classList.toggle("is-missing", !isReady && modelEntries.length > 0);
     readinessPanel.classList.toggle("is-unavailable", false);
     readinessSetup.hidden = isReady || modelEntries.length === 0;
+    readinessSetup.textContent = videoModelMissing
+        ? "The local video generator is missing. Follow the video-model setup steps in the project README, then check readiness again."
+        : "Follow the local model setup instructions in the project README, then check readiness again.";
     readinessIcon.textContent = isReady ? "✓" : "!";
     modelList.replaceChildren();
     for (const [key, model] of modelEntries) {
       const chip = document.createElement("li");
       chip.className = `model-chip${model.installed === true ? "" : " is-missing"}`;
       const displayName = typeof model.name === "string" ? model.name : key;
-      chip.textContent = `${displayName} · ${model.installed === true ? "ready" : "needs setup"}`;
+      const modelState = model.installed === true && model.active !== false ? "ready" : "needs setup";
+      chip.textContent = `${displayName} · ${modelState}`;
       modelList.append(chip);
     }
 
@@ -149,18 +158,25 @@
       readinessTitle.textContent = "Your local studio is ready";
       readinessDescription.textContent = "All generation models are installed on this device.";
       generateButton.disabled = isSubmitting || jobInProgress;
-      if (generateButton.querySelector("span:nth-child(2)").textContent === "Models need setup") {
-        generateButton.querySelector("span:nth-child(2)").textContent = "Generate my video";
+      const buttonLabel = generateButton.querySelector("span:nth-child(2)");
+      if (["Models need setup", "Video model needs setup", "Video generator not active"].includes(buttonLabel.textContent)) {
+        buttonLabel.textContent = "Generate my video";
       }
     } else {
       readinessStatus = "models-needed";
-      readinessTitle.textContent = "A few local models need setup";
+      readinessTitle.textContent = videoModelMissing
+          ? "Local video model needs setup"
+          : "Local models need setup";
       readinessDescription.textContent = missing.length
-        ? "Install the models listed below before generating a video."
+        ? videoModelMissing
+          ? "A video generator is required before the studio can create a story video."
+          : "Install the models listed below before generating a video."
         : "The studio has not confirmed its local models yet. Check again in a moment.";
       if (!jobInProgress && !isSubmitting) {
         generateButton.disabled = true;
-        generateButton.querySelector("span:nth-child(2)").textContent = "Models need setup";
+        generateButton.querySelector("span:nth-child(2)").textContent = videoModelMissing
+            ? "Video model needs setup"
+            : "Models need setup";
       }
     }
   }
@@ -183,7 +199,7 @@
       readinessDescription.textContent = "Check that the studio is running, then check again. You can still submit a story.";
       readinessSetup.hidden = true;
       // A failed readiness request can be a temporary connection issue. Let the server decide on submission.
-      if (generateButton.querySelector("span:nth-child(2)").textContent === "Models need setup") {
+      if (["Models need setup", "Video model needs setup", "Video generator not active"].includes(generateButton.querySelector("span:nth-child(2)").textContent)) {
         generateButton.disabled = isSubmitting || jobInProgress;
         generateButton.querySelector("span:nth-child(2)").textContent = "Generate my video";
       }
@@ -265,7 +281,7 @@
 
   function updatePhases(phase) {
     const sequence = ["storyboard", "narration", "scenes", "animation", "assembly"];
-    const labels = { storyboard: "Storyboard", narration: "Narration", scenes: "Illustrations", animation: "Animation", assembly: "Assemble video", complete: "Video assembly complete" };
+    const labels = { storyboard: "Storyboard", narration: "Narration", scenes: "Scene plan", animation: "Generate footage", assembly: "Assemble video", complete: "Video assembly complete" };
     const completeAt = phase === "complete" ? sequence.length : sequence.indexOf(phase);
     phaseItems.forEach((item, index) => {
       const complete = completeAt >= 0 && index < completeAt;

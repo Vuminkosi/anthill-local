@@ -51,15 +51,12 @@ services:
       HF_HUB_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-      IMAGE_MODEL: ${IMAGE_MODEL:-Lykon/dreamshaper-8}
-      IMAGE_MODEL_VARIANT: ${IMAGE_MODEL_VARIANT:-fp16}
-      IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
-      ANIMATEDIFF_MODEL_PATH: ${ANIMATEDIFF_MODEL_PATH:-/data/models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2}
       KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
       KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
     volumes:
       - ./output:/data/output
       - ./models:/data/models
+      - ltx_video_models:/data/models/ltx-video:ro
       - ./assets:/data/assets
       - ./state:/data/state
     depends_on:
@@ -83,12 +80,11 @@ services:
       HF_HUB_DISABLE_TELEMETRY: "1"
       HF_TOKEN: ${HF_TOKEN:-}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
-      IMAGE_MODEL_PATH: ${IMAGE_MODEL_PATH:-/data/models/huggingface/Lykon--dreamshaper-8}
-      ANIMATEDIFF_MODEL_PATH: ${ANIMATEDIFF_MODEL_PATH:-/data/models/animatediff/guoyww--animatediff-motion-adapter-v1-5-2}
       KOKORO_MODEL_PATH: ${KOKORO_MODEL_PATH:-/data/models/voices/kokoro/kokoro-v1_0.pth}
       KOKORO_VOICE_PATH: ${KOKORO_VOICE_PATH:-/data/models/voices/kokoro/voices/af_heart.pt}
     volumes:
       - ./models:/data/models
+      - ltx_video_models:/data/models/ltx-video
     command: ["python", "model_setup.py", "--all-approved"]
     depends_on:
       ollama-model-setup:
@@ -97,3 +93,4 @@ services:
 
 volumes:
   ollama_models:
+  ltx_video_models:
