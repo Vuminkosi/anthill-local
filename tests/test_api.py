@@ -354,6 +354,7 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertIn('<select id="character" name="character"', html)
         self.assertIn('<option value="" selected>Let the story decide</option>', html)
         self.assertIn('<option value="A dog">A dog</option>', html)
+        self.assertIn('<option value="A stick person">Stick person</option>', html)
         self.assertNotIn('<input id="character"', html)
 
     def test_readiness_exposes_ltx_video_state_without_starting_model_setup(self) -> None:
