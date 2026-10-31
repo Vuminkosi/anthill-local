@@ -9,7 +9,6 @@
   const storyCount = document.getElementById("story-count");
   const toneField = document.getElementById("tone");
   const characterField = document.getElementById("character");
-  const characterCount = document.getElementById("character-count");
   const adjustmentsField = document.getElementById("adjustments");
   const adjustmentsCount = document.getElementById("adjustments-count");
   const regenerateNote = document.getElementById("regenerate-note");
@@ -250,6 +249,20 @@
     };
   }
 
+  function restoreCharacterSelection(value) {
+    const character = typeof value === "string" ? value.slice(0, 500) : "";
+    characterField.querySelectorAll("option[data-saved-character]").forEach((option) => option.remove());
+    const hasChoice = Array.from(characterField.options).some((option) => option.value === character);
+    if (character && !hasChoice) {
+      const option = document.createElement("option");
+      option.value = character;
+      option.textContent = `Previously saved: ${character.length > 72 ? `${character.slice(0, 69)}…` : character}`;
+      option.dataset.savedCharacter = "true";
+      characterField.append(option);
+    }
+    characterField.value = character;
+  }
+
   function restoreJobInputs(job) {
     const saved = getSavedJobInputs(job.id);
     const inputs = saved || job;
@@ -263,13 +276,12 @@
     } else {
       toneField.value = "heartfelt";
     }
-    characterField.value = typeof inputs.character === "string" ? inputs.character.slice(0, 500) : "";
+    restoreCharacterSelection(inputs.character);
     adjustmentsField.value = typeof inputs.adjustments === "string" ? inputs.adjustments.slice(0, 1000) : "";
     if ([30, 45, 60].includes(Number(job.duration_seconds))) {
       const durationOption = form.querySelector(`input[name="duration"][value="${Number(job.duration_seconds)}"]`);
       if (durationOption) durationOption.checked = true;
     }
-    characterCount.textContent = `${characterField.value.length.toLocaleString()} / 500`;
     adjustmentsCount.textContent = `${adjustmentsField.value.length.toLocaleString()} / 1,000`;
     const direction = captureDirection();
     activeStory = story;
@@ -698,9 +710,6 @@
     if (storyError.textContent && storyField.value.trim().length >= 25) storyError.textContent = "";
     updateRegenerateAction();
   });
-  characterField.addEventListener("input", () => {
-    characterCount.textContent = `${characterField.value.length.toLocaleString()} / 500`;
-  });
   adjustmentsField.addEventListener("input", () => {
     adjustmentsCount.textContent = `${adjustmentsField.value.length.toLocaleString()} / 1,000`;
   });
@@ -723,7 +732,6 @@
     try { return localStorage.getItem(THEME_KEY) || "system"; } catch (_) { return "system"; }
   })());
   storyCount.textContent = `${storyField.value.length.toLocaleString()} / 6,000`;
-  characterCount.textContent = `${characterField.value.length.toLocaleString()} / 500`;
   adjustmentsCount.textContent = `${adjustmentsField.value.length.toLocaleString()} / 1,000`;
   checkReadiness();
   loadRecent().then(() => {

@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f7f8fa">
   <title>AntHill Studio — Local video maker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='studio.css') }}">
-  <script src="{{ url_for('static', filename='studio.js', v='ltx-connected-2') }}" defer></script>
+  <script src="{{ url_for('static', filename='studio.js', v='character-select-1') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#story">Skip to story</a>
@@ -84,9 +84,20 @@
               </div>
               <div class="direction-field">
                 <label class="field-label" for="character">Character to feature <span class="optional-label">Optional</span></label>
-                <p class="field-help" id="character-help">Enter a character's name or description to guide scenes.</p>
-                <input id="character" name="character" type="text" maxlength="500" aria-describedby="character-help character-count">
-                <span id="character-count" class="character-count">0 / 500</span>
+                <p class="field-help" id="character-help">Choose who or what should stand out. The story can decide.</p>
+                <select id="character" name="character" aria-describedby="character-help">
+                  <option value="" selected>Let the story decide</option>
+                  <option value="A child">A child</option>
+                  <option value="A teenager">A teenager</option>
+                  <option value="An adult">An adult</option>
+                  <option value="An older adult">An older adult</option>
+                  <option value="A couple">A couple</option>
+                  <option value="A family">A family</option>
+                  <option value="A group of friends">A group of friends</option>
+                  <option value="A dog">A dog</option>
+                  <option value="A cat">A cat</option>
+                  <option value="Another animal">Another animal</option>
+                </select>
               </div>
               <div class="direction-field direction-field-wide">
                 <label class="field-label" for="adjustments">Changes to apply <span class="optional-label">Optional</span></label>

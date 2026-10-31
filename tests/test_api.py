@@ -346,6 +346,16 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["status"], "models-needed")
 
+    def test_index_uses_character_feature_dropdown(self) -> None:
+        response = self.client.get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<select id="character" name="character"', html)
+        self.assertIn('<option value="" selected>Let the story decide</option>', html)
+        self.assertIn('<option value="A dog">A dog</option>', html)
+        self.assertNotIn('<input id="character"', html)
+
     def test_readiness_exposes_ltx_video_state_without_starting_model_setup(self) -> None:
         models = {
             "narration": {"installed": True},
