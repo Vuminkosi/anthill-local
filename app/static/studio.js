@@ -5,6 +5,15 @@
   const THEME_KEY = "anthill.theme";
   const form = document.getElementById("generate-form");
   const storyField = document.getElementById("story");
+  const videoFormatField = document.getElementById("video-format");
+  const storyFields = document.getElementById("story-fields");
+  const didYouKnowFields = document.getElementById("did-you-know-fields");
+  const categoryField = document.getElementById("research-category");
+  const subcategoryField = document.getElementById("research-subcategory");
+  const categoryCatalog = JSON.parse(categoryField.dataset.catalog);
+  const sourceAttribution = document.getElementById("source-attribution");
+  const sourceList = document.getElementById("source-list");
+  const videoDescription = document.getElementById("video-description");
   const storyError = document.getElementById("story-error");
   const storyCount = document.getElementById("story-count");
   const toneField = document.getElementById("tone");
@@ -120,7 +129,7 @@
       ? "Change the story or direction above to create a new video. This will not edit the existing MP4."
       : "This creates a new video. The existing MP4 will remain unchanged. The original story is not available in this tab.";
     regenerateNote.hidden = false;
-    storyRecoveryNote.hidden = hasOriginalStory;
+    storyRecoveryNote.hidden = hasOriginalStory || videoFormatField.value !== "story";
   }
 
   function showReadiness(payload) {
@@ -242,11 +251,54 @@
   function captureDirection(story = storyField.value.trim()) {
     return {
       story,
+      video_format: videoFormatField.value,
+      category: categoryField.value,
+      subcategory: subcategoryField.value,
       duration_seconds: Number(new FormData(form).get("duration")) || 30,
       tone: toneField.value || "heartfelt",
       character: characterField.value.trim(),
       adjustments: adjustmentsField.value.trim(),
     };
+  }
+
+  function updateVideoFormat() {
+    const researched = videoFormatField.value !== "story";
+    storyFields.hidden = researched;
+    didYouKnowFields.hidden = !researched;
+    storyField.required = !researched;
+    categoryField.required = researched;
+    subcategoryField.required = researched;
+    updateRegenerateAction();
+  }
+
+  function populateSubcategories(selected = "") {
+    const category = categoryCatalog[categoryField.value];
+    subcategoryField.replaceChildren(new Option("Choose a subcategory", ""));
+    if (category) Object.entries(category.subcategories).forEach(([key, item]) => subcategoryField.add(new Option(item.label, key)));
+    subcategoryField.disabled = !category;
+    subcategoryField.value = selected;
+  }
+
+  function renderSources(sources) {
+    sourceList.replaceChildren();
+    (Array.isArray(sources) ? sources : []).forEach((source) => {
+      if (!source || typeof source.title !== "string" || typeof source.url !== "string" || !source.url.startsWith("https://en.wikipedia.org/wiki/")) return;
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = source.title;
+      item.append(link, document.createTextNode(` — ${source.license || "CC BY-SA 4.0"}`));
+      sourceList.append(item);
+    });
+    sourceAttribution.hidden = sourceList.children.length === 0;
+  }
+
+  function updateVideoDescription() {
+    videoDescription.textContent = videoFormatField.value === "story"
+      ? "AI-generated live-action-style reenactment."
+      : "AI-generated illustrative footage based on researched sources; not documentary footage.";
   }
 
   function restoreCharacterSelection(value) {
@@ -266,6 +318,10 @@
   function restoreJobInputs(job) {
     const saved = getSavedJobInputs(job.id);
     const inputs = saved || job;
+    videoFormatField.value = ["did_you_know", "explainer"].includes(inputs.video_format) ? inputs.video_format : "story";
+    updateVideoFormat();
+    categoryField.value = typeof inputs.category === "string" ? inputs.category : "";
+    populateSubcategories(typeof inputs.subcategory === "string" ? inputs.subcategory : "");
     const story = saved && typeof saved.story === "string" ? saved.story : "";
     storyField.value = story.slice(0, 6000);
     sourceStoryForActiveJob = story || null;
@@ -428,6 +484,7 @@
       percentText.textContent = "";
       videoPlayer.src = videoUrl;
       videoPlayer.load();
+      renderSources(job.sources);
       downloadLink.href = videoUrl;
       jobInProgress = false;
       generateButton.disabled = readinessStatus === "models-needed";
@@ -481,7 +538,8 @@
       select.className = "recent-item-button";
       select.type = "button";
       const jobLabel = job.status === "done" ? "finished" : job.status === "error" ? "failed" : job.status === "cancelled" ? "cancelled" : "in progress";
-      select.setAttribute("aria-label", `Open ${jobLabel} ${Number(job.duration_seconds) || 30} second video`);
+      const titleText = typeof job.title === "string" && job.title.trim() ? job.title.trim() : "Untitled video";
+      select.setAttribute("aria-label", `Open ${titleText}, ${jobLabel}`);
       const icon = document.createElement("span");
       icon.className = "recent-icon";
       icon.setAttribute("aria-hidden", "true");
@@ -490,7 +548,7 @@
       copy.className = "recent-copy";
       const name = document.createElement("span");
       name.className = "recent-name";
-      name.textContent = `Story video · ${Number(job.duration_seconds) || 30} sec`;
+      name.textContent = titleText;
       const detail = document.createElement("span");
       detail.className = "recent-detail";
       const date = job.updated_at || job.created_at;
@@ -603,13 +661,14 @@
   async function createJob() {
     if (isSubmitting) return;
     const story = storyField.value.trim();
+    const researched = videoFormatField.value !== "story";
     storyError.textContent = "";
-    if (story.length < 25) {
+    if (!researched && story.length < 25) {
       storyError.textContent = "Add at least 25 characters so the story has enough detail.";
       storyField.focus();
       return;
     }
-    if (story.length > 6000) {
+    if (!researched && story.length > 6000) {
       storyError.textContent = "Keep the story under 6,000 characters.";
       storyField.focus();
       return;
@@ -620,6 +679,14 @@
     isSubmitting = true;
     jobInProgress = true;
     const direction = captureDirection(story);
+    if (researched && (!direction.category || !direction.subcategory)) {
+      showError("Choose a category and subcategory for this video.");
+      categoryField.focus();
+      isSubmitting = false;
+      jobInProgress = false;
+      generateButton.disabled = false;
+      return;
+    }
     activeStory = direction.story;
     activeDuration = direction.duration_seconds;
     activeTone = direction.tone;
@@ -636,7 +703,7 @@
       const response = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ story, duration_seconds: activeDuration, tone: activeTone, character: activeCharacter, adjustments: activeAdjustments }),
+        body: JSON.stringify({ ...direction, duration_seconds: activeDuration }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -709,7 +776,10 @@
     storyCount.textContent = `${storyField.value.length.toLocaleString()} / 6,000`;
     if (storyError.textContent && storyField.value.trim().length >= 25) storyError.textContent = "";
     updateRegenerateAction();
+    updateVideoDescription();
   });
+  videoFormatField.addEventListener("change", updateVideoFormat);
+  categoryField.addEventListener("change", () => populateSubcategories());
   adjustmentsField.addEventListener("input", () => {
     adjustmentsCount.textContent = `${adjustmentsField.value.length.toLocaleString()} / 1,000`;
   });
@@ -732,6 +802,8 @@
     try { return localStorage.getItem(THEME_KEY) || "system"; } catch (_) { return "system"; }
   })());
   storyCount.textContent = `${storyField.value.length.toLocaleString()} / 6,000`;
+  populateSubcategories();
+  updateVideoFormat();
   adjustmentsCount.textContent = `${adjustmentsField.value.length.toLocaleString()} / 1,000`;
   checkReadiness();
   loadRecent().then(() => {

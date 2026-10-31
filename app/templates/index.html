@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#f7f8fa">
   <title>AntHill Studio — Local video maker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='studio.css') }}">
-  <script src="{{ url_for('static', filename='studio.js', v='character-select-2') }}" defer></script>
+  <script src="{{ url_for('static', filename='studio.js', v='did-you-know-1') }}" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#story">Skip to story</a>
@@ -51,13 +51,22 @@
         <section class="editor-panel" aria-labelledby="editor-title">
           <div class="panel-heading">
             <div>
-              <p class="step-label"><span>01</span> &nbsp;YOUR STORY</p>
+              <p class="step-label"><span>01</span> &nbsp;VIDEO SETUP</p>
               <h2 id="editor-title">Start with a moment</h2>
             </div>
             <span class="local-pill">PRIVATE BY DEFAULT</span>
           </div>
 
           <form id="generate-form" novalidate>
+            <div class="direction-field">
+              <label class="field-label" for="video-format">Video type</label>
+              <select id="video-format" name="video-format">
+                <option value="story" selected>Story video</option>
+                <option value="did_you_know">Did You Know?</option>
+                <option value="explainer">Explainer</option>
+              </select>
+            </div>
+            <div id="story-fields">
             <label class="field-label" for="story">What happened?</label>
             <p class="field-help" id="story-help">Paste a true story or a scene you want to tell. A few sentences work best.</p>
             <textarea id="story" name="story" minlength="25" maxlength="6000" aria-describedby="story-help story-error story-count" placeholder="A small act of kindness changed someone's day…" required></textarea>
@@ -69,7 +78,6 @@
                 <span id="story-count" class="character-count">0 / 6,000</span>
               </div>
             </div>
-
             <div class="direction-fields">
               <div class="direction-field">
                 <label class="field-label" for="tone">Story tone</label>
@@ -107,6 +115,25 @@
                 <span id="adjustments-count" class="character-count">0 / 1,000</span>
               </div>
             </div>
+            </div>
+            <div id="did-you-know-fields" class="direction-fields" hidden>
+              <div class="direction-field">
+                <label class="field-label" for="research-category">Category</label>
+              <select id="research-category" name="research-category" data-catalog='{{ did_you_know_categories|tojson|forceescape }}'>
+                  <option value="">Choose a category</option>
+                  {% for key, item in did_you_know_categories.items() %}
+                  <option value="{{ key }}">{{ item.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="direction-field">
+                <label class="field-label" for="research-subcategory">Subcategory</label>
+                <select id="research-subcategory" name="research-subcategory" disabled>
+                  <option value="">Choose a subcategory</option>
+                </select>
+                <p class="field-help">AntHill researches the topic you select, then creates an educational video. The research request sends only your selected category and subcategory to Wikipedia; your story stays in this app.</p>
+              </div>
+            </div>
 
             <fieldset class="duration-fieldset">
               <legend class="field-label">Video length</legend>
@@ -132,7 +159,7 @@
             <div class="panel-heading output-heading">
               <div>
                 <p class="step-label"><span>02</span> &nbsp;YOUR VIDEO</p>
-                <h2 id="output-title">The story, in motion</h2>
+                <h2 id="output-title">Your video, in motion</h2>
               </div>
               <span class="format-tag">9:16</span>
             </div>
@@ -174,9 +201,14 @@
               </div>
               <p id="cancelled-message" class="cancelled-message" role="status" hidden>No video was produced because generation was cancelled.</p>
               <div id="video-result" class="video-result" hidden>
-                <p class="field-help">AI-generated live-action-style reenactment.</p>
+                <p id="video-description" class="field-help">AI-generated live-action-style footage.</p>
                 <video id="video-player" controls playsinline preload="metadata" aria-label="Your finished story video"></video>
                 <a id="download-link" class="download-button" href="#" download>Download video <span aria-hidden="true">↓</span></a>
+                <section id="source-attribution" class="source-attribution" hidden aria-label="Research sources">
+                  <h3>Research sources</h3>
+                  <ul id="source-list"></ul>
+                  <p>Wikipedia text is available under the <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">Creative Commons Attribution-ShareAlike 4.0 license</a>. AI narration may simplify the source material.</p>
+                </section>
               </div>
               <div id="job-error" class="job-error" role="alert" hidden>
                 <p class="error-title">This video could not be finished.</p>

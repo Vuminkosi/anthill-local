@@ -352,3 +352,5 @@ button:focus-visible, a:focus-visible, select:focus-visible, textarea:focus-visi
   .progress-track span { transition: none; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+.direction-fields[hidden], #story-fields[hidden] { display: none; }

@@ -78,6 +78,7 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertEqual(status["duration_seconds"], 45)
         self.assertEqual(status["percent"], 0)
         self.assertEqual(status["phase"], "queued")
+        self.assertTrue(status["title"].startswith("Story video - "))
         self.assertNotIn("story", status)
         self.assertNotIn("error", status)
         self.assertEqual(self.client.get("/api/jobs").get_json()["jobs"][0]["id"], job_id)
@@ -356,6 +357,27 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertIn('<option value="A dog">A dog</option>', html)
         self.assertIn('<option value="A stick person">Stick person</option>', html)
         self.assertNotIn('<input id="character"', html)
+        self.assertIn('<option value="did_you_know">Did You Know?</option>', html)
+        self.assertIn('<option value="explainer">Explainer</option>', html)
+        self.assertIn('id="research-category"', html)
+        self.assertIn('id="research-subcategory"', html)
+        self.assertIn("Human Relations", html)
+        self.assertIn("The Book of Enoch", html)
+        self.assertIn("Angels and heavenly help available to us", html)
+        self.assertIn("Marriage and Relationship Dynamics", html)
+        self.assertIn("Business", html)
+
+    def test_researched_video_types_require_valid_category_and_subcategory(self) -> None:
+        self.assertEqual(self.submit(video_format="did_you_know", category="science").status_code, 400)
+        self.assertEqual(self.submit(video_format="explainer", category="science", subcategory="bogus").status_code, 400)
+        response = self.submit(video_format="did_you_know", category="science", subcategory="space", story="")
+        self.assertEqual(response.status_code, 202)
+        job = self.client.get(f"/api/jobs/{response.get_json()['id']}").get_json()
+        self.assertEqual(job["video_format"], "did_you_know")
+        self.assertEqual(job["category"], "science")
+        self.assertEqual(job["subcategory"], "space")
+        self.assertEqual(job["sources"], [])
+        self.assertEqual(job["title"], "Did You Know: Space and astronomy")
 
     def test_readiness_exposes_ltx_video_state_without_starting_model_setup(self) -> None:
         models = {

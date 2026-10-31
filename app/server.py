@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime
 import os
 import re
 import sqlite3
@@ -22,6 +24,7 @@ from model_setup import (
     ltx_video_assets_ready,
 )
 from pipeline import GenerationCancelled, ROOT, local_ollama_base, run_job
+from did_you_know import CATEGORIES, category_selection
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100_000
@@ -74,7 +77,12 @@ def _initialize_database() -> None:
                 updated_at REAL NOT NULL,
                 tone TEXT NOT NULL DEFAULT 'heartfelt',
                 character TEXT NOT NULL DEFAULT '',
-                adjustments TEXT NOT NULL DEFAULT ''
+                adjustments TEXT NOT NULL DEFAULT '',
+                video_format TEXT NOT NULL DEFAULT 'story',
+                category TEXT NOT NULL DEFAULT '',
+                subcategory TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                sources_json TEXT NOT NULL DEFAULT '[]'
             )"""
         )
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()}
@@ -86,6 +94,9 @@ def _initialize_database() -> None:
             connection.execute("ALTER TABLE jobs ADD COLUMN character TEXT NOT NULL DEFAULT ''")
         if "adjustments" not in columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN adjustments TEXT NOT NULL DEFAULT ''")
+        for name, declaration in (("video_format", "TEXT NOT NULL DEFAULT 'story'"), ("category", "TEXT NOT NULL DEFAULT ''"), ("subcategory", "TEXT NOT NULL DEFAULT ''"), ("title", "TEXT NOT NULL DEFAULT ''"), ("sources_json", "TEXT NOT NULL DEFAULT '[]'")):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {declaration}")
         now = time.time()
         interrupted_cancellations = [
             row["id"] for row in connection.execute("SELECT id FROM jobs WHERE status='cancelling'").fetchall()
@@ -107,6 +118,17 @@ def _initialize_database() -> None:
 
 
 def _public_job(row: sqlite3.Row) -> dict:
+    video_format = row["video_format"] if "video_format" in row.keys() else "story"
+    category = row["category"] if "category" in row.keys() else ""
+    subcategory = row["subcategory"] if "subcategory" in row.keys() else ""
+    saved_title = row["title"] if "title" in row.keys() else ""
+    if not saved_title and video_format in {"did_you_know", "explainer"}:
+        selected = CATEGORIES.get(category, {}).get("subcategories", {}).get(subcategory, {})
+        topic = selected.get("label", "Selected topic")
+        saved_title = f"{'Did You Know' if video_format == 'did_you_know' else 'Explainer'}: {topic}"
+    if not saved_title:
+        created = datetime.fromtimestamp(row["created_at"]).astimezone().strftime("%b %d, %Y %H:%M")
+        saved_title = f"Story video - {created}"
     result = {
         "id": row["id"],
         "status": row["status"],
@@ -117,6 +139,11 @@ def _public_job(row: sqlite3.Row) -> dict:
         "tone": row["tone"] if "tone" in row.keys() else "heartfelt",
         "character": row["character"] if "character" in row.keys() else "",
         "adjustments": row["adjustments"] if "adjustments" in row.keys() else "",
+        "video_format": video_format,
+        "category": category,
+        "subcategory": subcategory,
+        "title": saved_title,
+        "sources": json.loads(row["sources_json"] or "[]") if "sources_json" in row.keys() else [],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -247,18 +274,25 @@ def _run_claimed_job(job_id: str) -> None:
             tone=row["tone"],
             character=row["character"],
             adjustments=row["adjustments"],
+            video_format=row["video_format"],
+            category=row["category"],
+            subcategory=row["subcategory"],
         )
         expected_name = f"AntHill_{job_id}.mp4"
         output_path = Path(output).resolve()
         output_root = (ROOT / "output").resolve()
         if output_path.parent != output_root or output_path.name != expected_name or not output_path.is_file():
             raise RuntimeError("Video pipeline returned an unexpected output path")
+        source_path = (ROOT / "output" / f"working_{job_id}" / "research_sources.json").resolve()
+        sources_json = "[]"
+        if source_path.parent == (ROOT / "output" / f"working_{job_id}").resolve() and source_path.is_file():
+            sources_json = json.dumps(json.loads(source_path.read_text(encoding="utf-8")), ensure_ascii=False)
         with _connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
-                "UPDATE jobs SET status='done', phase='complete', progress='Video ready', percent=100, video=?, error=NULL, updated_at=? "
+                "UPDATE jobs SET status='done', phase='complete', progress='Video ready', percent=100, video=?, sources_json=?, error=NULL, updated_at=? "
                 "WHERE id=? AND status='working' AND ?=0",
-                (expected_name, time.time(), job_id, int(cancelled.is_set())),
+                (expected_name, sources_json, time.time(), job_id, int(cancelled.is_set())),
             )
             connection.commit()
         if updated.rowcount != 1:
@@ -331,7 +365,7 @@ def start_worker() -> None:
 
 @app.get("/")
 def home():
-    return render_template("index.html")
+    return render_template("index.html", did_you_know_categories=CATEGORIES)
 
 
 @app.get("/health")
@@ -362,14 +396,30 @@ def start_job():
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
         return jsonify(error="The request must contain a story."), 400
-    story = payload.get("story")
+    video_format = payload.get("video_format", "story")
+    if not isinstance(video_format, str) or video_format not in {"story", "did_you_know", "explainer"}:
+        return jsonify(error="Choose a supported video format."), 400
+    story = payload.get("story", "")
     if not isinstance(story, str):
         return jsonify(error="Enter a story as text."), 400
     story = story.strip()
-    if len(story) < 25:
-        return jsonify(error="Please enter at least 25 characters."), 400
-    if len(story) > 6000:
-        return jsonify(error="Stories must be 6,000 characters or fewer."), 400
+    category = subcategory = ""
+    if video_format == "story":
+        if len(story) < 25:
+            return jsonify(error="Please enter at least 25 characters."), 400
+        if len(story) > 6000:
+            return jsonify(error="Stories must be 6,000 characters or fewer."), 400
+    else:
+        try:
+            category, subcategory = payload.get("category", ""), payload.get("subcategory", "")
+            category_selection(category, subcategory)
+        except (ValueError, TypeError):
+            return jsonify(error="Choose a valid category and subcategory."), 400
+    if video_format == "story":
+        title = f"Story video - {datetime.now().astimezone().strftime('%b %d, %Y %H:%M')}"
+    else:
+        _category_label, subcategory_label, _query = category_selection(category, subcategory)
+        title = f"{'Did You Know' if video_format == 'did_you_know' else 'Explainer'}: {subcategory_label}"
     requested_duration = payload.get("duration_seconds", 30)
     if isinstance(requested_duration, bool) or not isinstance(requested_duration, int) or requested_duration not in _durations:
         return jsonify(error="Choose a 30, 45, or 60-second video."), 400
@@ -397,13 +447,13 @@ def start_job():
             connection.rollback()
             return jsonify(error="The video queue is full. Please try again shortly."), 503
         connection.execute(
-            "INSERT INTO jobs(id,story,duration_seconds,status,phase,progress,percent,created_at,updated_at,tone,character,adjustments) "
-            "VALUES(?,?,?,'queued','queued','Waiting for the local generator',0,?,?,?,?,?)",
-            (job_id, story, requested_duration, now, now, tone, character, adjustments),
+            "INSERT INTO jobs(id,story,duration_seconds,status,phase,progress,percent,created_at,updated_at,tone,character,adjustments,video_format,category,subcategory,title) "
+            "VALUES(?,?,?,'queued','queued','Waiting for the local generator',0,?,?,?,?,?,?,?,?,?)",
+            (job_id, story, requested_duration, now, now, tone, character, adjustments, video_format, category, subcategory, title),
         )
         connection.commit()
     logger.info("Queued video job %s (%ss)", job_id, requested_duration)
-    return jsonify(id=job_id, status="queued", phase="queued", tone=tone,
+    return jsonify(id=job_id, status="queued", phase="queued", tone=tone, video_format=video_format, category=category, subcategory=subcategory, title=title,
                    character=character, adjustments=adjustments), 202
 
 
