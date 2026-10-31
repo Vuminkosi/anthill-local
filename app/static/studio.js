@@ -687,6 +687,7 @@
       generateButton.disabled = false;
       return;
     }
+    if (researched) direction.story = "";
     activeStory = direction.story;
     activeDuration = direction.duration_seconds;
     activeTone = direction.tone;

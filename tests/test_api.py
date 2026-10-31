@@ -370,7 +370,7 @@ class VideoJobsApiTests(unittest.TestCase):
     def test_researched_video_types_require_valid_category_and_subcategory(self) -> None:
         self.assertEqual(self.submit(video_format="did_you_know", category="science").status_code, 400)
         self.assertEqual(self.submit(video_format="explainer", category="science", subcategory="bogus").status_code, 400)
-        response = self.submit(video_format="did_you_know", category="science", subcategory="space", story="")
+        response = self.submit(video_format="did_you_know", category="science", subcategory="space", story="stale hidden story text")
         self.assertEqual(response.status_code, 202)
         job = self.client.get(f"/api/jobs/{response.get_json()['id']}").get_json()
         self.assertEqual(job["video_format"], "did_you_know")
@@ -378,6 +378,9 @@ class VideoJobsApiTests(unittest.TestCase):
         self.assertEqual(job["subcategory"], "space")
         self.assertEqual(job["sources"], [])
         self.assertEqual(job["title"], "Did You Know: Space and astronomy")
+        with server._connect() as connection:
+            stored_story = connection.execute("SELECT story FROM jobs WHERE id=?", (response.get_json()["id"],)).fetchone()[0]
+        self.assertEqual(stored_story, "")
 
     def test_readiness_exposes_ltx_video_state_without_starting_model_setup(self) -> None:
         models = {

@@ -415,6 +415,7 @@ def start_job():
             category_selection(category, subcategory)
         except (ValueError, TypeError):
             return jsonify(error="Choose a valid category and subcategory."), 400
+        story = ""
     if video_format == "story":
         title = f"Story video - {datetime.now().astimezone().strftime('%b %d, %Y %H:%M')}"
     else:
