@@ -4,7 +4,7 @@ AntHill turns a short story into a locally generated vertical video. Paste a sto
 
 The pipeline creates a six-scene storyboard with local Ollama, generates a separate continuous video clip for each scene with LTX-Video 2B distilled, and assembles those clips with Kokoro narration, subtitles, and music. Generated footage is enlarged for the 1080 × 1920 export; character identity and visual quality can vary between scenes.
 
-All story planning, image generation, narration, and video assembly run locally in Docker. No host Python or Ollama installation is required. Ollama cloud features are disabled. Model downloads are needed for initial installation; inference does not require paid APIs or send prompts to a hosted model service. Docker images and Python packages also need internet access when first installed.
+All story planning, image generation, narration, and video assembly run locally in Docker. No host Python or Ollama installation is required. Ollama cloud features are disabled. Model downloads are needed for initial installation; inference does not require paid APIs or send prompts to a hosted model service. Docker images and Python packages also need internet access when first installed. The Did You Know and explainer formats additionally fetch bounded Wikipedia research for the selected category/subcategory at generation time; those modes are not fully offline. They do not use a hosted inference provider.
 
 **Validation status:** LTX source integration is in progress. A complete LTX GPU video and end-to-end story-to-MP4 are **NOT VERIFIED** until the app finishes a generation on the target machine.
 
@@ -15,9 +15,9 @@ All story planning, image generation, narration, and video assembly run locally 
 - 32 GB system RAM is recommended, and the Docker Desktop WSL memory limit must be high enough for LTX model initialization. A 16 GB WSL cap has not yet completed initialization.
 - Plan for about 28 GB of model files, plus Docker images, Python dependencies, caches, and temporary render files. Keep more space available during initial downloads.
 
-The setup downloads the pinned LTX-Video 2B distilled checkpoint, PixArt T5 text encoder, spatial upscaler, and configuration to the Docker volume on D:, plus Kokoro voice assets. Ollama retains its own model volume. Runtime generation uses installed files only and does not fetch model weights.
+The setup downloads the pinned LTX-Video 2B distilled checkpoint, PixArt T5 text encoder, spatial upscaler, and configuration to a named Docker volume, plus Kokoro voice assets. The physical volume location depends on the Docker Desktop storage configuration; `compose.yaml` does not select a Windows drive. Ollama retains its own model volume. Runtime generation uses installed files only and does not fetch model weights.
 
-The active video model is the pinned LTX-Video 0.9.8 2B distilled multi-scale pipeline. Checkpoint assets persist in the `ltx_video_models` Docker volume on D:. DreamShaper and AnimateDiff are no longer part of model setup or the active generation path.
+The active video model is the pinned LTX-Video 0.9.8 2B distilled multi-scale pipeline. Checkpoint assets persist in the `ltx_video_models` named Docker volume. DreamShaper and AnimateDiff are no longer part of model setup or the active generation path.
 
 ## Install and start
 
@@ -77,7 +77,7 @@ Invoke-RestMethod http://localhost:8090/api/readiness
 docker compose down
 ```
 
-`docker compose down` stops and removes the Compose containers and network. It does not remove the named Ollama model volume or the bind-mounted `models`, `state`, and `output` folders. Do not add `--volumes` unless you intend to remove the Ollama model volume.
+`docker compose down` stops and removes the Compose containers and network. It does not remove the named Ollama model volume or the bind-mounted `models`, `state`, and `output` folders. Do not add `--volumes` unless you intend to remove both the Ollama and LTX named model volumes.
 
 ## Use the command line
 
@@ -154,3 +154,19 @@ The AntHill app container must be running before the client launches this server
 ## Video generation status
 
 The active app path uses local LTX-Video 2B distilled weights. A GPU smoke test produced and played a 5.125-second H.264 clip at 448x800 and 8 fps. The app readiness endpoint reports LTX-Video 2B Distilled as active. A full story-to-MP4 job was submitted but cancelled during local storyboard generation, so full-job integration remains unverified. DreamShaper and AnimateDiff are no longer used.
+
+## Developer and agent checks
+
+Start with [AGENTS.md](AGENTS.md) for the source map, local-data/network boundaries
+and verification gates. Without Docker, model downloads or GPU startup, run from
+the repository root with Python installed:
+
+```sh
+python -B -m unittest discover -s tests -p 'test_cli.py' -v
+git diff --check
+```
+
+This standard-library-only CLI/client suite stubs service calls. It does not
+verify a running server, GPU inference or a finished video. Other tests have
+additional dependencies or runtime side effects; see AGENTS.md before selecting
+them. Installing `app/requirements.txt` is not required for this lightweight check.
